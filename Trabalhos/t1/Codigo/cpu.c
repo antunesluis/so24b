@@ -106,7 +106,6 @@ static void imprime_erro(cpu_t *self, char *str) {
 
 void cpu_concatena_descricao(cpu_t *self, char *str) {
     char aux[40];
-
     imprime_registradores(self, aux);
     strcat(str, aux);
 
@@ -209,8 +208,8 @@ static void op_CARGM(cpu_t *self)  // carrega da memória
 
 static void op_CARGX(cpu_t *self)  // carrega indexado
 {
-    int A1, mA1mX;
     int X = self->X;
+    int A1, mA1mX;
     if (pega_A1(self, &A1) && pega_mem(self, A1 + X, &mA1mX)) {
         self->A = mA1mX;
         self->PC += 2;
