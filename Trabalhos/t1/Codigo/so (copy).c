@@ -275,7 +275,12 @@ static processo_t *so_adiciona_novo_processo(so_t *self, char *nome_do_executave
     return processo;
 }
 
-static int calcula_terminal_processo(int dispositivo, int terminal_base) { return dispositivo + terminal_base; }
+static int calcula_terminal_processo(int dispositivo, int terminal_base)
+{
+    // 16 dispositivos terminal, 4 terminais, cada terminal possui 4
+    // dispositivos
+    return dispositivo + terminal_base;
+}
 
 // FILA {{{ 1
 
@@ -442,8 +447,8 @@ static int so_trata_interrupcao(void *argC, int reg_A)
 {
     irq_t irq = reg_A;
     so_t *self = argC;
-    // esse print polui bastante, recomendo tirar quando estiver com mais confiança
-    // console_printf("SO: recebi IRQ %d (%s)", irq, irq_nome(irq));
+    // esse print polui bastante, recomendo tirar quando estiver com mais
+    // confiança console_printf("SO: recebi IRQ %d (%s)", irq, irq_nome(irq));
     // salva o estado da cpu no descritor do processo que foi interrompido
     so_salva_estado_da_cpu(self);
     // faz o atendimento da interrupção
@@ -458,40 +463,26 @@ static int so_trata_interrupcao(void *argC, int reg_A)
 
 static void so_salva_estado_da_cpu(so_t *self)
 {
+    // t1: salva os registradores que compõem o estado da cpu no descritor do
+    //   processo corrente. os valores dos registradores foram colocados pela
+    //   CPU na memória, nos endereços IRQ_END_*
+    // se não houver processo corrente, não faz nada
+
     processo_t *processo_corrente = self->processo_corrente;
     if (processo_corrente == NULL)
         return;
 
-    // Obtem os registradores salvos da interrupção anterior e atualiza o estado do processo
+    // Obtem os registradores salvos da interrupção anterior e atualiza o estado
+    // do processo
     mem_le(self->mem, IRQ_END_PC, &processo_corrente->pc);
     mem_le(self->mem, IRQ_END_A, &processo_corrente->reg_A);
     mem_le(self->mem, IRQ_END_X, &processo_corrente->reg_X);
 }
 
-static bool trata_pendencia_es(so_t *self, processo_t *processo, int tipo, motivo_bloqueio_t motivo)
-{
-    int estado;
-    int dispositivo = calcula_terminal_processo(tipo, processo->terminal);
-
-    if (es_le(self->es, dispositivo, &estado) != ERR_OK) {
-        console_printf("SO: problema no acesso ao estado do dispositivo");
-        self->erro_interno = true;
-        return false;
-    }
-
-    if (estado != 0) {
-        console_printf("SO: dispositivo %d disponível", dispositivo);
-        muda_motivo_bloq_processo(processo, SEM_BLOQUEIO);
-        muda_estado_processo(processo, PRONTO);
-    }
-
-    return estado != 0;
-}
-
 static void trata_pendencia_leitura(so_t *self, processo_t *processo)
 {
-    int estado;
     int terminal_teclado_ok = calcula_terminal_processo(D_TERM_A_TECLADO_OK, processo->terminal);
+    int estado;
 
     if (es_le(self->es, terminal_teclado_ok, &estado) != ERR_OK) {
         console_printf("SO: problema no acesso ao estado do teclado");
@@ -508,31 +499,20 @@ static void trata_pendencia_leitura(so_t *self, processo_t *processo)
 
 static void trata_pendencia_escrita(so_t *self, processo_t *processo)
 {
-
-    int estado;
+    // Verifica se o terminal está disponível para escrita
     int terminal_tela_ok = calcula_terminal_processo(D_TERM_A_TELA_OK, processo->terminal);
-    if (es_le(self->es, terminal_tela_ok, &estado) != ERR_OK) {
-        console_printf("SO: problema no acesso ao estado da tela");
-        self->erro_interno = true;
-        return;
-    }
-
-    if (estado == 0) {
-        return;
-    }
-
-    int dado = processo->reg_X;
     int terminal_tela = calcula_terminal_processo(D_TERM_A_TELA, processo->terminal);
-    console_printf("Imprimi %c", dado);
-    if (es_escreve(self->es, terminal_tela, dado) != ERR_OK) {
-        console_printf("SO: problema no acesso à tela");
-        self->erro_interno = true;
-        return;
-    }
+    int estado;
 
-    processo->reg_A = 0;
-    processo->motivo_bloq = SEM_BLOQUEIO;
-    processo->estado_atual = PRONTO;
+    if (es_le(self->es, terminal_tela_ok, &estado) == ERR_OK && estado != 0) {
+        int dado = processo->reg_A;
+        if (es_escreve(self->es, terminal_tela, dado) == ERR_OK) {
+            processo->motivo_bloq = SEM_BLOQUEIO;
+            processo->estado_atual = PRONTO;
+            console_printf("SO: desbloqueado terminal %d\n", processo->terminal);
+        }
+    }
+    return;
 }
 
 static void trata_pendencia_espera_morte(so_t *self, processo_t *processo)
@@ -811,7 +791,6 @@ static void so_chamada_le(so_t *self)
         console_printf("SO: dispositivo de entrada ocupado");
         muda_estado_processo(processo, BLOQUEADO);
         muda_motivo_bloq_processo(processo, ESPERANDO_LEITURA);
-        // retorno para não fazer a leitura do terminal
         return;
     }
 
@@ -843,6 +822,7 @@ static void so_chamada_escr(so_t *self)
     //   T1: deveria usar o dispositivo de saída corrente do processo
 
     int terminal = self->processo_corrente->terminal;
+    processo_t *processo = self->processo_corrente;
 
     int estado;
     int terminal_tela_ok = calcula_terminal_processo(D_TERM_A_TELA_OK, terminal);
@@ -856,8 +836,8 @@ static void so_chamada_escr(so_t *self)
     // bloquear o processo
     if (estado == 0) {
         console_printf("SO: dispositivo de saída ocupado");
-        muda_estado_processo(self->processo_corrente, BLOQUEADO);
-        muda_motivo_bloq_processo(self->processo_corrente, ESPERANDO_ESCRITA);
+        muda_estado_processo(processo, BLOQUEADO);
+        muda_motivo_bloq_processo(processo, ESPERANDO_ESCRITA);
         // Preciso retornar para não escrever o dado no terminal
         return;
     }
@@ -884,13 +864,9 @@ static void so_chamada_cria_proc(so_t *self)
 {
     // T1: deveria criar um novo processo
 
-    processo_t *processo_corrente = self->processo_corrente;
-    if (processo_corrente == NULL)
-        return;
-
+    int ender_nome_arq;
     // Le o X do descritor do processo criador para obter o nome do arquivo do
     // processo
-    int ender_nome_arq;
     if (mem_le(self->mem, IRQ_END_X, &ender_nome_arq) != ERR_OK) {
         console_printf("SO: Erro ao obter o endereço do nome do programa\n");
         mem_escreve(self->mem, IRQ_END_A, -1);
@@ -916,7 +892,7 @@ static void so_chamada_cria_proc(so_t *self)
     // A
     //   do processo que pediu a criação
     console_printf("SO: criando processo %d com nome %s", novo_processo->pid, nome);
-    processo_corrente->reg_A = novo_processo->pid;
+    self->processo_corrente->reg_A = novo_processo->pid;
 }
 
 // implementação da chamada se sistema SO_MATA_PROC
@@ -928,13 +904,10 @@ static void so_chamada_mata_proc(so_t *self)
     processo_t *processo_corrente = self->processo_corrente;
     if (processo_corrente == NULL)
         return;
-
     int pid_alvo = processo_corrente->reg_X;
-    processo_t *processo_alvo = busca_processo_pid(self, pid_alvo);
 
     // Processo que deve ser morto é o processo corrente
     if (pid_alvo == 0) {
-        processo_alvo = processo_corrente;
         mata_processo(self, processo_corrente);
         processo_corrente->reg_A = 0;
         self->processo_corrente = NULL;
@@ -942,6 +915,7 @@ static void so_chamada_mata_proc(so_t *self)
     }
 
     // Procuro o processo alvo na tabela e se exitir defino como morto
+    processo_t *processo_alvo = busca_processo_pid(self, pid_alvo);
     if (processo_alvo != NULL) {
         mata_processo(self, processo_alvo);
         self->processo_corrente->reg_A = 0;
@@ -970,11 +944,20 @@ static void so_chamada_espera_proc(so_t *self)
         return;
     }
 
-    // Se o processo alvo não estiver morto, bloqueia o processo corrente
+    // Procuro o processo alvo na tabela e se exitir defino como bloqueado
     processo_t *processo_alvo = busca_processo_pid(self, pid_alvo);
+    if (processo_alvo == NULL) {
+        console_printf("SO: processo %d não encontrado", pid_alvo);
+        mem_escreve(self->mem, IRQ_END_A, -1);
+        return;
+    }
+
+    // Se o processo alvo não estiver morto, bloqueia o processo corrente
     if (processo_alvo->estado_atual != MORTO) {
         muda_estado_processo(processo_corrente, BLOQUEADO);
         muda_motivo_bloq_processo(processo_corrente, ESPERANDO_PROCESSO);
+        mem_escreve(self->mem, IRQ_END_A, 0);
+        processo_corrente->reg_A = 0;
         return;
     }
 

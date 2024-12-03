@@ -6,6 +6,8 @@
 // INCLUDES {{{1
 
 #include "console.h"
+#include "tela.h"
+#include "terminal.h"
 
 #include <assert.h>
 #include <ctype.h>
@@ -14,18 +16,15 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "tela.h"
-#include "terminal.h"
-
 // CONSTANTES {{{1
 
 // tamanho da tela -- a janela do terminal tem que ter pelo menos esse tamanho
 // altere caso queira mais linhas (ou menos)
-#define N_LIN 24   // número de linhas na tela
-#define N_COL 120  // número de colunas na tela
+#define N_LIN 24 // número de linhas na tela
+#define N_COL 80 // número de colunas na tela
 
 // número de linhas para cada componente da tela
-#define N_TERM 4  // número de terminais, cada um ocupa 2 linhas na tela
+#define N_TERM 4 // número de terminais, cada um ocupa 2 linhas na tela
 #define N_LIN_TERM (N_TERM * 2)
 #define N_LIN_STATUS 1
 #define N_LIN_ENTRADA 1
@@ -42,7 +41,8 @@
 
 // DECLARAÇÃO {{{1
 
-struct console_t {
+struct console_t
+{
     terminal_t *term[N_TERM];
     int cor_txt[N_TERM];
     int cor_cursor[N_TERM];
@@ -55,8 +55,9 @@ struct console_t {
 
 // CRIAÇÃO {{{1
 
-static console_t *console_global;  // gambiarra para simplificar o uso de prints na console
-console_t *console_cria(void) {
+static console_t *console_global; // gambiarra para simplificar o uso de prints na console
+console_t *console_cria(void)
+{
     console_t *self = malloc(sizeof(*self));
     assert(self != NULL);
     console_global = self;
@@ -85,9 +86,11 @@ console_t *console_cria(void) {
 
 static void console_desenha(console_t *self);
 
-void console_destroi(console_t *self) {
+void console_destroi(console_t *self)
+{
     console_desenha(self);
-    if (self->arquivo_de_log != NULL) fclose(self->arquivo_de_log);
+    if (self->arquivo_de_log != NULL)
+        fclose(self->arquivo_de_log);
     tela_puts(COR_OCUPADO, "  digite ENTER para sair  ");
     tela_atualiza();
     while (tela_tecla() != '\n') {
@@ -104,19 +107,23 @@ void console_destroi(console_t *self) {
 
 // TERMINAIS {{{1
 
-terminal_t *console_terminal(console_t *self, char id_terminal) {
+terminal_t *console_terminal(console_t *self, char id_terminal)
+{
     int num_terminal = tolower(id_terminal) - 'a';
-    if (num_terminal < 0 || num_terminal >= N_TERM) return NULL;
+    if (num_terminal < 0 || num_terminal >= N_TERM)
+        return NULL;
     return self->term[num_terminal];
 }
 
-static void atualiza_terminais(console_t *self) {
+static void atualiza_terminais(console_t *self)
+{
     for (int t = 0; t < N_TERM; t++) {
         terminal_tictac(self->term[t]);
     }
 }
 
-static void insere_string_no_terminal(console_t *self, char id_terminal, char *str) {
+static void insere_string_no_terminal(console_t *self, char id_terminal, char *str)
+{
     // insere caracteres no terminal (e espaço no final)
     terminal_t *terminal = console_terminal(self, id_terminal);
     if (terminal == NULL) {
@@ -131,7 +138,8 @@ static void insere_string_no_terminal(console_t *self, char id_terminal, char *s
     terminal_insere_char(terminal, ' ');
 }
 
-static void limpa_saida_do_terminal(console_t *self, char id_terminal) {
+static void limpa_saida_do_terminal(console_t *self, char id_terminal)
+{
     terminal_t *terminal = console_terminal(self, id_terminal);
     if (terminal == NULL) {
         console_printf("Terminal '%c' inválido\n", id_terminal);
@@ -142,20 +150,23 @@ static void limpa_saida_do_terminal(console_t *self, char id_terminal) {
 
 // SAÍDA {{{1
 
-static void insere_string_na_console(console_t *self, char *s) {
+static void insere_string_na_console(console_t *self, char *s)
+{
     for (int l = 0; l < N_LIN_CONSOLE - 1; l++) {
         strncpy(self->txt_console[l], self->txt_console[l + 1], N_COL);
-        self->txt_console[l][N_COL] = '\0';  // quem definiu strncpy é estúpido!
+        self->txt_console[l][N_COL] = '\0'; // quem definiu strncpy é estúpido!
     }
     strncpy(self->txt_console[N_LIN_CONSOLE - 1], s, N_COL);
-    self->txt_console[N_LIN_CONSOLE - 1][N_COL] = '\0';  // grrrr
+    self->txt_console[N_LIN_CONSOLE - 1][N_COL] = '\0'; // grrrr
     if (self->arquivo_de_log != NULL) {
         fprintf(self->arquivo_de_log, "%s\n", s);
     }
 }
 
-static void insere_strings_na_console(console_t *self, char *s) {
-    if (*s == '\0') return;
+static void insere_strings_na_console(console_t *self, char *s)
+{
+    if (*s == '\0')
+        return;
     char *f = strchr(s, '\n');
     if (f == NULL) {
         // não tem \n, insere a string e tá pronto
@@ -168,16 +179,18 @@ static void insere_strings_na_console(console_t *self, char *s) {
     insere_strings_na_console(self, f + 1);
 }
 
-void console_print_status(console_t *self, char *txt) {
+void console_print_status(console_t *self, char *txt)
+{
     // imprime alinhado a esquerda ("-"), max N_COL chars ("*")
     sprintf(self->txt_status, "%-*s", N_COL, txt);
 }
 
-int console_printf(char *formato, ...) {
+int console_printf(char *formato, ...)
+{
     // esta função usa número variável de argumentos, como o printf.
     // Se não sabe como é isso, dá uma olhada em:
     // https://www.geeksforgeeks.org/variadic-functions-in-c/
-    console_t *self = console_global;  // gambiarra para simplificar o uso de prints na console
+    console_t *self = console_global; // gambiarra para simplificar o uso de prints na console
     char s[sizeof(self->txt_console)];
     va_list arg;
     va_start(arg, formato);
@@ -188,7 +201,8 @@ int console_printf(char *formato, ...) {
 
 // ENTRADA {{{1
 
-static void insere_comando_externo(console_t *self, char c) {
+static void insere_comando_externo(console_t *self, char c)
+{
     int n_cmd = strlen(self->fila_de_comandos_externos);
     if (n_cmd < N_CMD_EXT - 2) {
         self->fila_de_comandos_externos[n_cmd] = c;
@@ -196,7 +210,8 @@ static void insere_comando_externo(console_t *self, char c) {
     }
 }
 
-static char remove_comando_externo(console_t *self) {
+static char remove_comando_externo(console_t *self)
+{
     char *p = self->fila_de_comandos_externos;
     char cmd = *p;
     if (cmd != '\0') {
@@ -205,7 +220,8 @@ static char remove_comando_externo(console_t *self) {
     return cmd;
 }
 
-static void interpreta_linha_entrada(console_t *self) {
+static void interpreta_linha_entrada(console_t *self)
+{
     // interpreta uma linha digitada pelo operador
     // Comandos aceitos:
     // Etstr entra a string 'str' no terminal 't'  ex: eb30
@@ -221,35 +237,36 @@ static void interpreta_linha_entrada(console_t *self) {
     char cmd = toupper(linha[0]);
     int val;
     switch (cmd) {
-        case 'E':
-            insere_string_no_terminal(self, linha[1], &linha[2]);
-            break;
-        case 'Z':
-            limpa_saida_do_terminal(self, linha[1]);
-            break;
-        case 'D':
-            val = atoi(&linha[1]);
-            tela_espera(val);
-            break;
-        case 'P':
-        case '1':
-        case 'C':
-        case 'F':
-            insere_comando_externo(self, cmd);
-            break;
-        default:
-            console_printf("Comando '%c' não reconhecido", cmd);
+    case 'E':
+        insere_string_no_terminal(self, linha[1], &linha[2]);
+        break;
+    case 'Z':
+        limpa_saida_do_terminal(self, linha[1]);
+        break;
+    case 'D':
+        val = atoi(&linha[1]);
+        tela_espera(val);
+        break;
+    case 'P':
+    case '1':
+    case 'C':
+    case 'F':
+        insere_comando_externo(self, cmd);
+        break;
+    default:
+        console_printf("Comando '%c' não reconhecido", cmd);
     }
     strcpy(self->txt_entrada, "");
 }
 
 // lê e guarda um caractere do teclado; interpreta linha se for 'enter'
-static void verifica_entrada(console_t *self) {
+static void verifica_entrada(console_t *self)
+{
     char ch = tela_tecla();
 
     int l = strlen(self->txt_entrada);
 
-    if (ch == '\b' || ch == 127) {  // backspace ou del
+    if (ch == '\b' || ch == 127) { // backspace ou del
         if (l > 0) {
             self->txt_entrada[l - 1] = '\0';
         }
@@ -258,24 +275,27 @@ static void verifica_entrada(console_t *self) {
     } else if (ch >= ' ' && ch < 127 && l < N_COL) {
         self->txt_entrada[l] = ch;
         self->txt_entrada[l + 1] = '\0';
-    }  // senão, ignora o caractere digitado
+    } // senão, ignora o caractere digitado
 }
 
-char console_comando_externo(console_t *self) {
+char console_comando_externo(console_t *self)
+{
     verifica_entrada(self);
     return remove_comando_externo(self);
 }
 
 // DESENHO {{{1
 
-static void desenha_linha_terminal(char *txt, int linha, int cor_txt, int cor_cursor) {
+static void desenha_linha_terminal(char *txt, int linha, int cor_txt, int cor_cursor)
+{
     tela_posiciona(linha, 0);
     tela_puts(cor_txt, txt);
     tela_limpa_linha();
     tela_puts(cor_cursor, " ");
 }
 
-static void desenha_terminais(console_t *self) {
+static void desenha_terminais(console_t *self)
+{
     for (int t = 0; t < N_TERM; t++) {
         terminal_t *terminal = self->term[t];
         int cor_txt = self->cor_txt[t];
@@ -286,13 +306,15 @@ static void desenha_terminais(console_t *self) {
     }
 }
 
-static void desenha_status(console_t *self) {
+static void desenha_status(console_t *self)
+{
     tela_posiciona(LINHA_STATUS, 0);
     tela_puts(COR_STATUS, self->txt_status);
     tela_limpa_linha();
 }
 
-static void desenha_console(console_t *self) {
+static void desenha_console(console_t *self)
+{
     for (int l = 0; l < N_LIN_CONSOLE; l++) {
         tela_posiciona(LINHA_CONSOLE + l, 0);
         tela_puts(COR_CONSOLE, self->txt_console[l]);
@@ -300,10 +322,11 @@ static void desenha_console(console_t *self) {
     }
 }
 
-static void desenha_entrada(console_t *self) {
+static void desenha_entrada(console_t *self)
+{
     char txt_fixo[] = "P=para C=continua 1=passo F=fim  Ets=entra Zt=zera";
     tela_posiciona(LINHA_ENTRADA, 0);
-    tela_puts(COR_ENTRADA, "");  // gambiarra para limpar na cor certa
+    tela_puts(COR_ENTRADA, ""); // gambiarra para limpar na cor certa
     tela_limpa_linha();
     tela_posiciona(LINHA_ENTRADA, N_COL - sizeof(txt_fixo));
     tela_puts(COR_ENTRADA, txt_fixo);
@@ -311,7 +334,8 @@ static void desenha_entrada(console_t *self) {
     tela_puts(COR_ENTRADA, self->txt_entrada);
 }
 
-static void console_desenha(console_t *self) {
+static void console_desenha(console_t *self)
+{
     desenha_terminais(self);
     desenha_status(self);
     desenha_console(self);
@@ -322,7 +346,8 @@ static void console_desenha(console_t *self) {
 }
 
 // TICTAC {{{1
-void console_tictac(console_t *self) {
+void console_tictac(console_t *self)
+{
     verifica_entrada(self);
     atualiza_terminais(self);
     console_desenha(self);

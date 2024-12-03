@@ -6,7 +6,8 @@
 #ifndef DISPOSITIVOS_H
 #define DISPOSITIVOS_H
 
-typedef enum {
+typedef enum
+{
     D_TERM_A_TECLADO = 0,
     D_TERM_A_TECLADO_OK = 1,
     D_TERM_A_TELA = 2,
@@ -30,14 +31,4 @@ typedef enum {
     N_DISPOSITIVOS
 } dispositivo_id_t;
 
-#define TECLADO 0
-#define TECLADO_OK 1
-#define TELA 2
-#define TELA_OK 3
-
-#define TERMINAL_A 0
-#define TERMINAL_B 4
-#define TERMINAL_C 8
-#define TERMINAL_D 12
-
-#endif  // DISPOSITIVOS_H
+#endif // DISPOSITIVOS_H
