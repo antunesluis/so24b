@@ -7,6 +7,7 @@
 #define CONSOLE_H
 
 #include <stdbool.h>
+
 #include "terminal.h"
 
 typedef struct console_t console_t;
@@ -40,4 +41,4 @@ terminal_t *console_terminal(console_t *self, char id_terminal);
 // esta função deve ser chamada periodicamente para que tela funcione
 void console_tictac(console_t *self);
 
-#endif // CONSOLE_H
+#endif  // CONSOLE_H
