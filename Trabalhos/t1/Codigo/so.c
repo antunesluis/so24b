@@ -379,11 +379,12 @@ static void trata_pendencia_leitura(so_t *self, processo_t *processo)
         return;
     }
 
-    // Se o dispositivo estiver disponivel desbloqueia o processo
-    if (estado != 0) {
-        console_printf("SO: terminal %d desbloqueado para leitura", processo->terminal);
-        desbloqueia_processo(processo);
-    }
+    // Se o teclado ainda estiver ocupado retorna
+    if (estado == 0)
+        return;
+
+    console_printf("SO: terminal %d desbloqueado para leitura", processo->terminal);
+    desbloqueia_processo(processo);
 }
 
 static void trata_pendencia_escrita(so_t *self, processo_t *processo)
@@ -396,7 +397,7 @@ static void trata_pendencia_escrita(so_t *self, processo_t *processo)
         return;
     }
 
-    // Se o dispositivo não estiver disponivel retorna
+    // Se a tela ainda estiver ocupada retorna
     if (estado == 0) {
         return;
     }
@@ -425,6 +426,7 @@ static void trata_pendencia_espera_morte(so_t *self, processo_t *processo)
     }
 }
 
+// Percorre a tabela de processos e verifica se as pendencias dos processos bloqueados foram resolvidas
 static void so_trata_pendencias(so_t *self)
 {
     for (int i = 0; i < self->n_processos; i++) {
@@ -610,6 +612,7 @@ static void so_trata_irq_chamada_sistema(so_t *self)
         return;
     }
     console_printf("SO: chamada de sistema %d", id_chamada);
+
     switch (id_chamada) {
     case SO_LE:
         so_chamada_le(self);
@@ -670,11 +673,6 @@ static void so_chamada_le(so_t *self)
 // escreve o valor do reg X na saída corrente do processo
 static void so_chamada_escr(so_t *self)
 {
-    // implementação com espera ocupada
-    //   T1: deveria bloquear o processo se dispositivo ocupado
-    // implementação escrevendo direto do terminal A
-    //   T1: deveria usar o dispositivo de saída corrente do processo
-
     int terminal = self->processo_corrente->terminal;
 
     int estado;
@@ -692,11 +690,6 @@ static void so_chamada_escr(so_t *self)
         return;
     }
 
-    // está lendo o valor de X e escrevendo o de A direto onde o processador
-    // colocou/vai pegar T1: deveria usar os registradores do processo que está
-    // realizando a E/S T1: caso o processo tenha sido bloqueado, esse acesso
-    // deve ser realizado em outra execução
-    //   do SO, quando ele verificar que esse acesso já pode ser feito.
     int dado;
     int terminal_tela = calcula_terminal_processo(D_TERM_A_TELA, terminal);
     mem_le(self->mem, IRQ_END_X, &dado);
