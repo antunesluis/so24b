@@ -51,18 +51,6 @@ typedef struct processo_t
     int buffer_pendente_escr;
 } processo_t;
 
-typedef struct nodo_fila_t
-{
-    processo_t *processo;
-    struct nodo_fila_t *proximo;
-} nodo_fila_t;
-
-typedef struct
-{
-    nodo_fila_t *inicio;
-    nodo_fila_t *fim;
-} fila_processos_t;
-
 struct so_t
 {
     cpu_t *cpu;
@@ -73,7 +61,6 @@ struct so_t
 
     struct processo_t **tabela_processos;
     struct processo_t *processo_corrente;
-    fila_processos_t *fila_prontos;
 
     int limite_processos;
     int n_processos;
@@ -91,8 +78,6 @@ static processo_t *so_adiciona_novo_processo(so_t *self, char *nome_do_executave
 static processo_t *busca_processo_pid(so_t *self, int pid);
 static processo_t *busca_primeiro_processo_em_estado(so_t *self, estado_processo_t estado);
 static void mata_processo(so_t *self, processo_t *processo);
-static void muda_estado_processo(processo_t *processo, estado_processo_t novo_estado);
-static void muda_motivo_bloq_processo(processo_t *processo, motivo_bloqueio_t novo_motivo);
 
 static processo_t *cria_processo(int pid, int pc)
 {
@@ -166,24 +151,22 @@ static void debug_tabela_processos(so_t *self)
     console_printf("=============================\n");
 }
 
-static void muda_estado_processo(processo_t *processo, estado_processo_t novo_estado)
+static void desbloqueia_processo(processo_t *processo)
 {
-    console_printf("SO: processo %d passa de %s para %s\n", processo->pid, estado_para_string(processo->estado_atual),
-                   estado_para_string(novo_estado));
-    processo->estado_atual = novo_estado;
+    processo->motivo_bloq = SEM_BLOQUEIO;
+    processo->estado_atual = PRONTO;
 }
 
-static void muda_motivo_bloq_processo(processo_t *processo, motivo_bloqueio_t novo_motivo)
+static void bloqueia_processo(processo_t *processo, motivo_bloqueio_t motivo)
 {
-    console_printf("SO: processo %d passa de %s para %s\n", processo->pid, motivo_para_string(processo->motivo_bloq),
-                   motivo_para_string(novo_motivo));
-    processo->motivo_bloq = novo_motivo;
+    processo->motivo_bloq = motivo;
+    processo->estado_atual = BLOQUEADO;
 }
 
 static void mata_processo(so_t *self, processo_t *processo)
 {
     console_printf("SO: matando processo %d", processo->pid);
-    muda_estado_processo(processo, MORTO);
+    processo->estado_atual = MORTO;
 }
 
 static processo_t *busca_primeiro_processo_em_estado(so_t *self, estado_processo_t estado)
@@ -271,76 +254,10 @@ static processo_t *so_adiciona_novo_processo(so_t *self, char *nome_do_executave
     self->n_processos++;
 
     debug_tabela_processos(self);
-
     return processo;
 }
 
 static int calcula_terminal_processo(int dispositivo, int terminal_base) { return dispositivo + terminal_base; }
-
-// FILA {{{ 1
-
-fila_processos_t *fila_cria()
-{
-    fila_processos_t *fila = malloc(sizeof(fila_processos_t));
-    if (fila == NULL) {
-        console_printf("Erro ao alocar memória para a fila.\n");
-        exit(-1);
-    }
-    fila->inicio = NULL;
-    fila->fim = NULL;
-    return fila;
-}
-
-void fila_adiciona(fila_processos_t *fila, processo_t *processo)
-{
-    nodo_fila_t *novo_nodo = malloc(sizeof(nodo_fila_t));
-    if (novo_nodo == NULL) {
-        console_printf("Erro: falha ao alocar memória para nodo da fila.\n");
-        exit(-1);
-    }
-    novo_nodo->processo = processo;
-    novo_nodo->proximo = NULL;
-
-    if (fila->fim == NULL) { // Fila estava vazia
-        fila->inicio = novo_nodo;
-    } else {
-        fila->fim->proximo = novo_nodo;
-    }
-    fila->fim = novo_nodo;
-}
-
-processo_t *fila_remove(fila_processos_t *fila)
-{
-    if (fila->inicio == NULL) { // Fila vazia
-        return NULL;
-    }
-
-    nodo_fila_t *nodo_removido = fila->inicio;
-    processo_t *processo = nodo_removido->processo;
-
-    fila->inicio = nodo_removido->proximo;
-    if (fila->inicio == NULL) { // Fila ficou vazia
-        fila->fim = NULL;
-    }
-
-    free(nodo_removido);
-    return processo;
-}
-
-void fila_destroi(fila_processos_t *fila)
-{
-    nodo_fila_t *atual = fila->inicio;
-    while (atual != NULL) {
-        nodo_fila_t *proximo = atual->proximo;
-        free(atual);
-        atual = proximo;
-    }
-    free(fila);
-}
-
-bool fila_vazia(fila_processos_t *fila) { return fila->inicio == NULL; }
-
-// CRIAÇÃO {{{1
 
 static processo_t **tabela_cria(so_t *self)
 {
@@ -422,22 +339,6 @@ static void so_trata_pendencias(so_t *self);
 static void so_escalona(so_t *self);
 static int so_despacha(so_t *self);
 
-// função a ser chamada pela CPU quando executa a instrução CHAMAC, no tratador
-// de
-//   interrupção em assembly
-// essa é a única forma de entrada no SO depois da inicialização
-// na inicialização do SO, a CPU foi programada para chamar esta função para
-// executar
-//   a instrução CHAMAC
-// a instrução CHAMAC só deve ser executada pelo tratador de interrupção
-//
-// o primeiro argumento é um ponteiro para o SO, o segundo é a identificação
-//   da interrupção
-// o valor retornado por esta função é colocado no registrador A, e pode ser
-//   testado pelo código que está após o CHAMAC. No tratador de interrupção em
-//   assembly esse valor é usado para decidir se a CPU deve retornar da
-//   interrupção (e executar o código de usuário) ou executar PARA e ficar
-//   suspensa até receber outra interrupção
 static int so_trata_interrupcao(void *argC, int reg_A)
 {
     irq_t irq = reg_A;
@@ -468,47 +369,25 @@ static void so_salva_estado_da_cpu(so_t *self)
     mem_le(self->mem, IRQ_END_X, &processo_corrente->reg_X);
 }
 
-static bool trata_pendencia_es(so_t *self, processo_t *processo, int tipo, motivo_bloqueio_t motivo)
-{
-    int estado;
-    int dispositivo = calcula_terminal_processo(tipo, processo->terminal);
-
-    if (es_le(self->es, dispositivo, &estado) != ERR_OK) {
-        console_printf("SO: problema no acesso ao estado do dispositivo");
-        self->erro_interno = true;
-        return false;
-    }
-
-    if (estado != 0) {
-        console_printf("SO: dispositivo %d disponível", dispositivo);
-        muda_motivo_bloq_processo(processo, SEM_BLOQUEIO);
-        muda_estado_processo(processo, PRONTO);
-    }
-
-    return estado != 0;
-}
-
 static void trata_pendencia_leitura(so_t *self, processo_t *processo)
 {
     int estado;
     int terminal_teclado_ok = calcula_terminal_processo(D_TERM_A_TECLADO_OK, processo->terminal);
-
     if (es_le(self->es, terminal_teclado_ok, &estado) != ERR_OK) {
         console_printf("SO: problema no acesso ao estado do teclado");
         self->erro_interno = true;
         return;
     }
 
+    // Se o dispositivo estiver disponivel desbloqueia o processo
     if (estado != 0) {
         console_printf("SO: terminal %d desbloqueado para leitura", processo->terminal);
-        muda_motivo_bloq_processo(processo, SEM_BLOQUEIO);
-        muda_estado_processo(processo, PRONTO);
+        desbloqueia_processo(processo);
     }
 }
 
 static void trata_pendencia_escrita(so_t *self, processo_t *processo)
 {
-
     int estado;
     int terminal_tela_ok = calcula_terminal_processo(D_TERM_A_TELA_OK, processo->terminal);
     if (es_le(self->es, terminal_tela_ok, &estado) != ERR_OK) {
@@ -517,6 +396,7 @@ static void trata_pendencia_escrita(so_t *self, processo_t *processo)
         return;
     }
 
+    // Se o dispositivo não estiver disponivel retorna
     if (estado == 0) {
         return;
     }
@@ -531,8 +411,7 @@ static void trata_pendencia_escrita(so_t *self, processo_t *processo)
     }
 
     processo->reg_A = 0;
-    processo->motivo_bloq = SEM_BLOQUEIO;
-    processo->estado_atual = PRONTO;
+    desbloqueia_processo(processo);
 }
 
 static void trata_pendencia_espera_morte(so_t *self, processo_t *processo)
@@ -542,19 +421,12 @@ static void trata_pendencia_espera_morte(so_t *self, processo_t *processo)
 
     if (processo_esperado->estado_atual == MORTO) {
         console_printf("SO: processo esperado %d morreu", pid_esperado);
-        muda_motivo_bloq_processo(processo, SEM_BLOQUEIO);
-        muda_estado_processo(processo, PRONTO);
+        desbloqueia_processo(processo);
     }
 }
 
 static void so_trata_pendencias(so_t *self)
 {
-    // t1: realiza ações que não são diretamente ligadas com a interrupção que
-    //   está sendo atendida:
-    // - E/S pendente
-    // - desbloqueio de processos
-    // - contabilidades
-
     for (int i = 0; i < self->n_processos; i++) {
         processo_t *processo = self->tabela_processos[i];
 
@@ -581,7 +453,7 @@ static void so_trata_pendencias(so_t *self)
                 self->erro_interno = true;
             }
 
-            // Quando um processo passa de bloqueado para pronto
+            // Quando um processo é desbloqueado
             if (processo->estado_atual == PRONTO) {
                 console_printf("SO: processo %d desbloqueado", processo->pid);
             }
@@ -591,12 +463,6 @@ static void so_trata_pendencias(so_t *self)
 
 static void so_escalona(so_t *self)
 {
-    // escolhe o próximo processo a executar, que passa a ser o processo
-    //   corrente; pode continuar sendo o mesmo de antes ou não
-    // t1: na primeira versão, escolhe um processo caso o processo corrente não
-    // possa continuar
-    //   executando. depois, implementar escalonador melhor
-
     // Verifica se o processo corrente pode continuar executando
     if (self->processo_corrente != NULL && self->processo_corrente->estado_atual == PRONTO) {
         // Continua com o processo corrente;
@@ -604,7 +470,6 @@ static void so_escalona(so_t *self)
     }
 
     // Busca o proximo processo pronto e define como processo corrente
-    // executando
     processo_t *proximo = busca_primeiro_processo_em_estado(self, PRONTO);
     if (proximo != NULL) {
         self->processo_corrente = proximo;
@@ -620,15 +485,13 @@ static void so_escalona(so_t *self)
     }
 
     console_printf("SO: nao existem processos prontos\n");
-    // self->processo_corrente = NULL;
     self->erro_interno = true;
 }
 
 static int so_despacha(so_t *self)
 {
-    // t1: se houver processo corrente, coloca o estado desse processo onde ele
-    //   será recuperado pela CPU (em IRQ_END_*) e retorna 0, senão retorna 1
-    // o valor retornado será o valor de retorno de CHAMAC
+    // se houver processo corrente, coloca o estado desse processo onde ele será recuperado pela
+    // CPU (em IRQ_END_*) e retorna 0, senão retorna 1 o valor retornado será o valor de retorno de CHAMAC
     if (self->erro_interno)
         return 1;
 
@@ -676,13 +539,6 @@ static void so_trata_irq(so_t *self, int irq)
 // interrupção gerada uma única vez, quando a CPU inicializa
 static void so_trata_irq_reset(so_t *self)
 {
-    // t1: deveria criar um processo para o init, e inicializar o estado do
-    //   processador para esse processo com os registradores zerados, exceto
-    //   o PC e o modo.
-    // como não tem suporte a processos, está carregando os valores dos
-    //   registradores diretamente para a memória, de onde a CPU vai carregar
-    //   para os seus registradores quando executar a instrução RETI
-
     // coloca o programa init na memória
     processo_t *init_processo = so_adiciona_novo_processo(self, "init.maq");
 
@@ -747,8 +603,6 @@ static void so_chamada_espera_proc(so_t *self);
 
 static void so_trata_irq_chamada_sistema(so_t *self)
 {
-    // a identificação da chamada está no registrador A
-    // t1: com processos, o reg A tá no descritor do processo corrente
     int id_chamada;
     if (mem_le(self->mem, IRQ_END_A, &id_chamada) != ERR_OK) {
         console_printf("SO: erro no acesso ao id da chamada de sistema");
@@ -774,27 +628,15 @@ static void so_trata_irq_chamada_sistema(so_t *self)
         break;
     default:
         console_printf("SO: chamada de sistema desconhecida (%d)", id_chamada);
-        // t1: deveria matar o processo
         mata_processo(self, self->processo_corrente);
         self->erro_interno = true;
     }
 }
 
-// implementação da chamada se sistema SO_LE
-// faz a leitura de um dado da entrada corrente do processo, coloca o dado no
-// reg A
+// implementação da chamada se sistema SO_LE faz a leitura de um dado da entrada corrente do processo,
+// coloca o dado no reg A
 static void so_chamada_le(so_t *self)
 {
-    // implementação com espera ocupada
-    //   T1: deveria realizar a leitura somente se a entrada estiver disponível,
-    //     senão, deveria bloquear o processo.
-    //   no caso de bloqueio do processo, a leitura (e desbloqueio) deverá
-    //     ser feita mais tarde, em tratamentos pendentes em outra interrupção,
-    //     ou diretamente em uma interrupção específica do dispositivo, se for
-    //     o caso
-    // implementação lendo direto do terminal A
-    //   T1: deveria usar dispositivo de entrada corrente do processo
-
     int terminal = self->processo_corrente->terminal;
     processo_t *processo = self->processo_corrente;
 
@@ -809,27 +651,18 @@ static void so_chamada_le(so_t *self)
     // Dispositivo ocupado, bloqueia o processo
     if (estado == 0) {
         console_printf("SO: dispositivo de entrada ocupado");
-        muda_estado_processo(processo, BLOQUEADO);
-        muda_motivo_bloq_processo(processo, ESPERANDO_LEITURA);
-        // retorno para não fazer a leitura do terminal
+        bloqueia_processo(processo, ESPERANDO_LEITURA);
         return;
     }
 
     int dado;
     int terminal_teclado = calcula_terminal_processo(D_TERM_A_TECLADO, terminal);
+    // Obtem o dado do teminal e registra no reg A do processo
     if (es_le(self->es, terminal_teclado, &dado) != ERR_OK) {
         console_printf("SO: problema no acesso ao teclado");
         self->erro_interno = true;
         return;
     }
-
-    // escreve no reg A do processador
-    // (na verdade, na posição onde o processador vai pegar o A quando retornar
-    // da int) T1: se houvesse processo, deveria escrever no reg A do processo
-    // T1: o acesso só deve ser feito nesse momento se for possível; se não, o
-    // processo
-    //   é bloqueado, e o acesso só deve ser feito mais tarde (e o processo
-    //   desbloqueado)
     mem_escreve(self->mem, IRQ_END_A, dado);
 }
 
@@ -852,13 +685,10 @@ static void so_chamada_escr(so_t *self)
         return;
     }
 
-    // Se o dispositivo de saida estiver ocupado, preciso salvar o dado e
-    // bloquear o processo
+    // Se o dispositivo de saida estiver ocupado bloqueia o processo
     if (estado == 0) {
         console_printf("SO: dispositivo de saída ocupado");
-        muda_estado_processo(self->processo_corrente, BLOQUEADO);
-        muda_motivo_bloq_processo(self->processo_corrente, ESPERANDO_ESCRITA);
-        // Preciso retornar para não escrever o dado no terminal
+        bloqueia_processo(self->processo_corrente, ESPERANDO_ESCRITA);
         return;
     }
 
@@ -882,8 +712,6 @@ static void so_chamada_escr(so_t *self)
 // implementação da chamada se sistema SO_CRIA_PROC cria um processo
 static void so_chamada_cria_proc(so_t *self)
 {
-    // T1: deveria criar um novo processo
-
     processo_t *processo_corrente = self->processo_corrente;
     if (processo_corrente == NULL)
         return;
@@ -912,16 +740,12 @@ static void so_chamada_cria_proc(so_t *self)
         return;
     }
 
-    // deveria escrever -1 (se erro) ou o PID do processo criado (se OK) no reg
-    // A
-    //   do processo que pediu a criação
     console_printf("SO: criando processo %d com nome %s", novo_processo->pid, nome);
+    // deveria escrever -1 (se erro) ou o PID do processo criado (se OK) no reg A do processo que pediu a criação
     processo_corrente->reg_A = novo_processo->pid;
 }
 
-// implementação da chamada se sistema SO_MATA_PROC
-// T1: deveria matar um processo
-// mata o processo com pid X (ou o processo corrente se X é 0)
+// implementação da chamada se sistema SO_MATA_PROC mata o processo com pid X (ou o processo corrente se X é 0)
 static void so_chamada_mata_proc(so_t *self)
 {
     // PID do processo a ser morto está no registrador X do precesso corrente
@@ -952,8 +776,7 @@ static void so_chamada_mata_proc(so_t *self)
     mem_escreve(self->mem, IRQ_END_A, -1);
 }
 
-// implementação da chamada se sistema SO_ESPERA_PROC
-// espera o fim do processo com pid X
+// implementação da chamada se sistema SO_ESPERA_PROC espera o fim do processo com pid X
 static void so_chamada_espera_proc(so_t *self)
 {
     // T1: deveria bloquear o processo se for o caso (e desbloquear na morte do
@@ -973,14 +796,12 @@ static void so_chamada_espera_proc(so_t *self)
     // Se o processo alvo não estiver morto, bloqueia o processo corrente
     processo_t *processo_alvo = busca_processo_pid(self, pid_alvo);
     if (processo_alvo->estado_atual != MORTO) {
-        muda_estado_processo(processo_corrente, BLOQUEADO);
-        muda_motivo_bloq_processo(processo_corrente, ESPERANDO_PROCESSO);
+        bloqueia_processo(processo_corrente, ESPERANDO_PROCESSO);
         return;
     }
 
     // Se o processo alvo já estiver morto
-    muda_estado_processo(processo_corrente, PRONTO);
-    muda_motivo_bloq_processo(processo_corrente, SEM_BLOQUEIO);
+    desbloqueia_processo(processo_corrente);
     mem_escreve(self->mem, IRQ_END_A, 0);
 }
 
