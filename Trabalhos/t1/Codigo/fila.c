@@ -1,85 +1,135 @@
 #include "fila.h"
+#include "console.h"
 
 // Cria uma nova fila
-fila_t *fila_cria()
+fila_t *fila_cria(void (*destroi_dado)(void *dado))
 {
     fila_t *fila = malloc(sizeof(fila_t));
     if (fila == NULL) {
-        fprintf(stderr, "Erro: falha ao alocar memória para a fila.\n");
-        exit(EXIT_FAILURE);
-    }
-    fila->inicio = NULL;
-    fila->fim = NULL;
-    fila->tamanho = 0;
-    return fila;
-}
-
-// Destroi a fila e libera memória
-void fila_destroi(fila_t *fila, void (*destruir_dado)(void *))
-{
-    no_t *atual = fila->inicio;
-    while (atual != NULL) {
-        no_t *temp = atual;
-        atual = atual->proximo;
-        if (destruir_dado != NULL) {
-            destruir_dado(temp->dado);
-        }
-        free(temp);
-    }
-    free(fila);
-}
-// Verifica se a fila está vazia
-bool fila_vazia(fila_t *fila) { return fila->tamanho == 0; }
-
-// Adiciona um elemento à fila
-void fila_enfileira(fila_t *fila, void *dado)
-{
-    no_t *novo_no = malloc(sizeof(no_t));
-    if (novo_no == NULL) {
-        fprintf(stderr, "Erro: falha ao alocar memória para o nó da fila.\n");
-        exit(EXIT_FAILURE);
-    }
-    novo_no->dado = dado;
-    novo_no->proximo = NULL;
-
-    if (fila->fim != NULL) {
-        fila->fim->proximo = novo_no;
-    }
-    fila->fim = novo_no;
-
-    if (fila->inicio == NULL) {
-        fila->inicio = novo_no;
-    }
-
-    fila->tamanho++;
-}
-
-// Remove um elemento da fila
-void *fila_desenfileira(fila_t *fila)
-{
-    if (fila_vazia(fila)) {
-        fprintf(stderr, "Erro: tentativa de desenfileirar de uma fila vazia.\n");
+        console_printf("FILA: Erro ao alocar memória para a fila\n");
         return NULL;
     }
 
-    no_t *temp = fila->inicio;
-    void *dado = temp->dado;
+    fila->inicio = NULL;
+    fila->fim = NULL;
+    fila->tamanho = 0;
+    fila->destroi_dado = destroi_dado;
 
-    fila->inicio = temp->proximo;
+    return fila;
+}
+
+// Destroi a fila
+void fila_destroi(fila_t *fila)
+{
+    if (fila == NULL) {
+        console_printf("FILA: Erro ao destruir fila\n");
+        return;
+    }
+
+    while (!fila_vazia(fila)) {
+        void *dado = fila_remove(fila);
+        if (fila->destroi_dado != NULL) {
+            fila->destroi_dado(dado);
+        }
+    }
+
+    free(fila);
+}
+
+// Verifica se a fila está vazia
+bool fila_vazia(fila_t *fila)
+{
+    if (fila == NULL)
+        return true;
+    return fila->tamanho == 0;
+}
+
+// Retorna o tamanho da fila
+int fila_tamanho(fila_t *fila)
+{
+    if (fila == NULL)
+        return 0;
+    return fila->tamanho;
+}
+
+// Insere um elemento no final da fila
+bool fila_insere(fila_t *fila, void *dado)
+{
+    if (fila == NULL) {
+        console_printf("FILA: Erro ao inserir elemento na fila\n");
+        return false;
+    }
+
+    no_fila_t *novo_no = malloc(sizeof(no_fila_t));
+    if (novo_no == NULL) {
+        console_printf("FILA: Erro ao alocar memória para novo nó\n");
+        return false;
+    }
+
+    novo_no->dado = dado;
+    novo_no->proximo = NULL;
+
+    if (fila_vazia(fila)) {
+        fila->inicio = novo_no;
+        fila->fim = novo_no;
+    } else {
+        fila->fim->proximo = novo_no;
+        fila->fim = novo_no;
+    }
+
+    fila->tamanho++;
+    return true;
+}
+
+// Remove e retorna o primeiro elemento da fila
+void *fila_remove(fila_t *fila)
+{
+    if (fila == NULL || fila_vazia(fila)) {
+        console_printf("FILA: Erro ao remover elemento da fila\n");
+        return NULL;
+    }
+
+    no_fila_t *no_removido = fila->inicio;
+    void *dado = no_removido->dado;
+
+    fila->inicio = fila->inicio->proximo;
+    fila->tamanho--;
+
+    // Se a fila ficou vazia, atualiza o fim
     if (fila->inicio == NULL) {
         fila->fim = NULL;
     }
 
-    free(temp);
-    fila->tamanho--;
+    free(no_removido);
     return dado;
 }
 
-// Retorna o elemento no início da fila sem removê-lo
-void *fila_topo(fila_t *fila)
+// Retorna o primeiro elemento sem remover
+void *fila_primeiro(fila_t *fila)
 {
-    if (fila_vazia(fila)) {
+    if (fila == NULL || fila_vazia(fila)) {
+        console_printf("FILA: Erro ao acessar primeiro elemento da fila\n");
         return NULL;
     }
     return fila->inicio->dado;
+}
+
+void fila_imprime(fila_t *fila, void (*imprime_dado)(void *))
+{
+    if (fila == NULL || imprime_dado == NULL) {
+        console_printf("FILA: Erro ao imprimir fila\n");
+        return;
+    }
+
+    if (fila_vazia(fila)) {
+        console_printf("FILA: A fila está vazia\n");
+        return;
+    }
+
+    console_printf("FILA: Imprimindo elementos da fila:\n");
+    no_fila_t *atual = fila->inicio;
+    while (atual != NULL) {
+        imprime_dado(atual->dado); // Chama a função para imprimir o dado
+        atual = atual->proximo;
+    }
 }

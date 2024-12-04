@@ -3,9 +3,6 @@
 // simulador de computador
 // so24b
 
-#include <stdio.h>
-#include <stdlib.h>
-
 #include "console.h"
 #include "controle.h"
 #include "cpu.h"
@@ -16,11 +13,15 @@
 #include "so.h"
 #include "terminal.h"
 
+#include <stdio.h>
+#include <stdlib.h>
+
 // constantes
-#define MEM_TAM 10000  // tamanho da memória principal
+#define MEM_TAM 10000 // tamanho da memória principal
 
 // estrutura com os componentes do computador simulado
-typedef struct {
+typedef struct
+{
     mem_t *mem;
     cpu_t *cpu;
     relogio_t *relogio;
@@ -29,7 +30,8 @@ typedef struct {
     controle_t *controle;
 } hardware_t;
 
-static void cria_hardware(hardware_t *hw) {
+static void cria_hardware(hardware_t *hw)
+{
     // cria a memória
     hw->mem = mem_cria(MEM_TAM);
 
@@ -41,7 +43,6 @@ static void cria_hardware(hardware_t *hw) {
     //   por exemplo, o dispositivo 8 do controlador de E/S (e da CPU) será o
     //   dispositivo 0 do relógio (que é o contador de instruções)
     hw->es = es_cria();
-
     // lê teclado, testa teclado, escreve tela, testa tela do terminal A
     terminal_t *terminal;
     terminal = console_terminal(hw->console, 'A');
@@ -49,28 +50,24 @@ static void cria_hardware(hardware_t *hw) {
     es_registra_dispositivo(hw->es, D_TERM_A_TECLADO_OK, terminal, 1, terminal_leitura, NULL);
     es_registra_dispositivo(hw->es, D_TERM_A_TELA, terminal, 2, NULL, terminal_escrita);
     es_registra_dispositivo(hw->es, D_TERM_A_TELA_OK, terminal, 3, terminal_leitura, NULL);
-
     // lê teclado, testa teclado, escreve tela, testa tela do terminal B
     terminal = console_terminal(hw->console, 'B');
     es_registra_dispositivo(hw->es, D_TERM_B_TECLADO, terminal, 0, terminal_leitura, NULL);
     es_registra_dispositivo(hw->es, D_TERM_B_TECLADO_OK, terminal, 1, terminal_leitura, NULL);
     es_registra_dispositivo(hw->es, D_TERM_B_TELA, terminal, 2, NULL, terminal_escrita);
     es_registra_dispositivo(hw->es, D_TERM_B_TELA_OK, terminal, 3, terminal_leitura, NULL);
-
     // lê teclado, testa teclado, escreve tela, testa tela do terminal C
     terminal = console_terminal(hw->console, 'C');
     es_registra_dispositivo(hw->es, D_TERM_C_TECLADO, terminal, 0, terminal_leitura, NULL);
     es_registra_dispositivo(hw->es, D_TERM_C_TECLADO_OK, terminal, 1, terminal_leitura, NULL);
     es_registra_dispositivo(hw->es, D_TERM_C_TELA, terminal, 2, NULL, terminal_escrita);
     es_registra_dispositivo(hw->es, D_TERM_C_TELA_OK, terminal, 3, terminal_leitura, NULL);
-
     // lê teclado, testa teclado, escreve tela, testa tela do terminal D
     terminal = console_terminal(hw->console, 'D');
     es_registra_dispositivo(hw->es, D_TERM_D_TECLADO, terminal, 0, terminal_leitura, NULL);
     es_registra_dispositivo(hw->es, D_TERM_D_TECLADO_OK, terminal, 1, terminal_leitura, NULL);
     es_registra_dispositivo(hw->es, D_TERM_D_TELA, terminal, 2, NULL, terminal_escrita);
     es_registra_dispositivo(hw->es, D_TERM_D_TELA_OK, terminal, 3, terminal_leitura, NULL);
-
     // lê relógio virtual, relógio real
     es_registra_dispositivo(hw->es, D_RELOGIO_INSTRUCOES, hw->relogio, 0, relogio_leitura, NULL);
     es_registra_dispositivo(hw->es, D_RELOGIO_REAL, hw->relogio, 1, relogio_leitura, NULL);
@@ -85,7 +82,8 @@ static void cria_hardware(hardware_t *hw) {
     hw->controle = controle_cria(hw->cpu, hw->console, hw->relogio);
 }
 
-static void destroi_hardware(hardware_t *hw) {
+static void destroi_hardware(hardware_t *hw)
+{
     controle_destroi(hw->controle);
     cpu_destroi(hw->cpu);
     es_destroi(hw->es);
@@ -94,7 +92,8 @@ static void destroi_hardware(hardware_t *hw) {
     mem_destroi(hw->mem);
 }
 
-int main() {
+int main()
+{
     hardware_t hw;
     so_t *so;
 
