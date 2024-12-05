@@ -1,3 +1,4 @@
+
 // so.c
 // sistema operacional
 // simulador de computador
@@ -12,7 +13,6 @@
 
 #include "console.h"
 #include "dispositivos.h"
-#include "fila.h"
 #include "instrucao.h"
 #include "irq.h"
 #include "programa.h"
@@ -23,7 +23,9 @@
 #define MAX_PROCESSOS 5
 #define FATOR_MULTIPLICADOR_LIMITE_PROCESSOS 2
 #define NUM_TERMINAIS 4
-#define QUANTUM_VALOR 20
+#define FILA_PROCESSOS_INICIAL 5
+#define FATOR_CRESCIMENTO_FILA 2
+#define QUANTUM_VALOR 40
 
 typedef enum
 {
@@ -53,6 +55,15 @@ typedef struct processo_t
     int buffer_pendente_escr;
 } processo_t;
 
+typedef struct
+{
+    processo_t **elementos;
+    int capacidade;
+    int inicio; // indice do primeiro elemento
+    int fim;    // indice do ultimo elemento
+    int quantidade;
+} fila_processos_t;
+
 struct so_t
 {
     cpu_t *cpu;
@@ -61,9 +72,9 @@ struct so_t
     console_t *console;
     bool erro_interno;
 
-    struct processo_t **tabela_processos;
-    struct processo_t *processo_corrente;
-    struct fila_t *fila_prontos;
+    processo_t **tabela_processos;
+    processo_t *processo_corrente;
+    fila_processos_t *fila_prontos;
 
     int limite_processos;
     int n_processos;
@@ -73,13 +84,133 @@ struct so_t
 
 typedef enum escalonador_t
 {
-    SIMPLES,
     ROUND_ROBIN,
+    SIMPLES,
 } escalonador_t;
 
 static int so_trata_interrupcao(void *argC, int reg_A);
 static int so_carrega_programa(so_t *self, char *nome_do_executavel);
 static bool copia_str_da_mem(int tam, char str[tam], mem_t *mem, int ender);
+
+// FILA PRONTOS {{{1
+
+static fila_processos_t *fila_processos_cria()
+{
+    fila_processos_t *fila = malloc(sizeof(fila_processos_t));
+    if (fila == NULL)
+        return NULL;
+
+    fila->elementos = malloc(FILA_PROCESSOS_INICIAL * sizeof(processo_t *));
+    if (fila->elementos == NULL) {
+        free(fila);
+        return NULL;
+    }
+
+    fila->capacidade = FILA_PROCESSOS_INICIAL;
+    fila->inicio = 0;
+    fila->fim = 0;
+    fila->quantidade = 0;
+
+    return fila;
+}
+
+static bool fila_processos_redimensiona(fila_processos_t *fila)
+{
+    int nova_capacidade = fila->capacidade * FATOR_CRESCIMENTO_FILA;
+    processo_t **novo_elementos = realloc(fila->elementos, nova_capacidade * sizeof(processo_t *));
+
+    if (novo_elementos == NULL)
+        return false;
+
+    // Reorganiza os elementos para manter a ordem lógica
+    if (fila->inicio > fila->fim) {
+        for (int i = 0; i < fila->quantidade; i++) {
+            novo_elementos[i] = novo_elementos[(fila->inicio + i) % fila->capacidade];
+        }
+    }
+
+    fila->elementos = novo_elementos;
+    fila->inicio = 0;
+    fila->fim = fila->quantidade;
+    fila->capacidade = nova_capacidade;
+
+    return true;
+}
+
+static bool fila_processos_insere(fila_processos_t *fila, processo_t *processo)
+{
+    if (fila->quantidade == fila->capacidade) {
+        if (!fila_processos_redimensiona(fila))
+            return false;
+    }
+
+    fila->elementos[fila->fim] = processo;
+    fila->fim = (fila->fim + 1) % fila->capacidade;
+    fila->quantidade++;
+
+    return true;
+}
+
+static processo_t *fila_processos_remove(fila_processos_t *fila)
+{
+    if (fila->quantidade == 0)
+        return NULL;
+
+    processo_t *processo = fila->elementos[fila->inicio];
+    fila->inicio = (fila->inicio + 1) % fila->capacidade;
+    fila->quantidade--;
+
+    return processo;
+}
+
+static bool fila_processos_vazia(fila_processos_t *fila) { return fila->quantidade == 0; }
+
+static void fila_processos_destroi(fila_processos_t *fila)
+{
+    free(fila->elementos);
+    free(fila);
+}
+
+static processo_t *fila_processos_primeiro(fila_processos_t *fila)
+{
+    if (fila->quantidade == 0)
+        return NULL;
+    return fila->elementos[fila->inicio];
+}
+
+static bool fila_processos_deleta_processo(fila_processos_t *fila, processo_t *processo_a_deletar)
+{
+    if (fila_processos_vazia(fila)) {
+        return false;
+    }
+
+    // Encontrar o índice do processo a ser deletado
+    int indice = -1;
+    for (int i = 0; i < fila->quantidade; i++) {
+        int indice_real = (fila->inicio + i) % fila->capacidade;
+        if (fila->elementos[indice_real] == processo_a_deletar) {
+            indice = indice_real;
+            break;
+        }
+    }
+
+    // Se o processo não foi encontrado
+    if (indice == -1) {
+        return false;
+    }
+
+    // Deslocar elementos para cobrir o espaço do processo deletado
+    for (int i = indice; i != fila->fim; i = (i + 1) % fila->capacidade) {
+        int proximo = (i + 1) % fila->capacidade;
+        fila->elementos[i] = fila->elementos[proximo];
+    }
+
+    // Ajustar o fim e a quantidade
+    fila->fim = (fila->fim - 1 + fila->capacidade) % fila->capacidade;
+    fila->quantidade--;
+
+    return true;
+}
 
 // PROCESSOS {{{1
 
@@ -161,58 +292,26 @@ static void debug_tabela_processos(so_t *self)
     console_printf("=============================\n");
 }
 
-void imprime_processo_fila(void *dado)
+static void debug_fila_processos(fila_processos_t *fila)
 {
-    processo_t *proc = (processo_t *)dado;
-    if (proc == NULL) {
-        console_printf("Elemento da fila está vazio\n");
-        return;
-    }
-
-    console_printf("PID: %d | Estado: %s | PC: %d | Reg A: %d | Reg X: %d | Terminal: %d | Motivo Bloqueio: %s\n",
-                   proc->pid, estado_para_string(proc->estado_atual), proc->pc, proc->reg_A, proc->reg_X,
-                   proc->terminal, motivo_para_string(proc->motivo_bloq));
-}
-
-void debug_fila_processos(fila_t *fila)
-{
-    if (fila == NULL || fila_vazia(fila)) {
-        console_printf("A fila de processos está vazia\n");
-        return;
-    }
-
     console_printf("==== Fila de Processos ====\n");
-    fila_imprime(fila, imprime_processo_fila);
-    console_printf("===========================\n");
-}
-
-// Remove um processo da fila de prontos
-static void so_fila_remove_processo(so_t *self, processo_t *processo_alvo)
-{
-    for (int i = 0; i < self->fila_prontos->tamanho; i++) {
-        processo_t *proc = fila_elemento_posicao(self->fila_prontos, i);
-        if (proc == processo_alvo) {
-            fila_remove_posicao(self->fila_prontos, i);
-            return;
+    for (int i = 0; i < fila->quantidade; i++) {
+        processo_t *proc = fila->elementos[(fila->inicio + i) % fila->capacidade];
+        if (proc != NULL) {
+            console_printf(
+                "PID: %d | Estado: %s | PC: %d | Reg A: %d | Reg X: %d | Terminal: %d | Motivo Bloqueio: %s\n",
+                proc->pid, estado_para_string(proc->estado_atual), proc->pc, proc->reg_A, proc->reg_X, proc->terminal,
+                motivo_para_string(proc->motivo_bloq));
+        } else {
+            console_printf("Posição %d: Vazia\n", i);
         }
     }
-    console_printf("SO: processo %d não encontrado na fila de prontos\n", processo_alvo->pid);
-}
-
-void reorganiza_fila_prontos(so_t *self, processo_t *processo)
-{
-    fila_remove(self->fila_prontos);
-    fila_insere(self->fila_prontos, processo);
-    self->processo_corrente = NULL;
 }
 
 static void desbloqueia_processo(so_t *self, processo_t *processo)
 {
     processo->motivo_bloq = SEM_BLOQUEIO;
     processo->estado_atual = PRONTO;
-
-    fila_insere(self->fila_prontos, processo);
-    debug_fila_processos(self->fila_prontos);
 }
 
 static void bloqueia_processo(so_t *self, processo_t *processo, motivo_bloqueio_t motivo)
@@ -220,7 +319,7 @@ static void bloqueia_processo(so_t *self, processo_t *processo, motivo_bloqueio_
     processo->motivo_bloq = motivo;
     processo->estado_atual = BLOQUEADO;
 
-    fila_remove(self->fila_prontos);
+    fila_processos_remove(self->fila_prontos);
     debug_fila_processos(self->fila_prontos);
 }
 
@@ -229,7 +328,7 @@ static void mata_processo(so_t *self, processo_t *processo)
     console_printf("SO: matando processo %d", processo->pid);
     processo->estado_atual = MORTO;
 
-    so_fila_remove_processo(self, processo);
+    fila_processos_deleta_processo(self->fila_prontos, processo);
     debug_fila_processos(self->fila_prontos);
 }
 
@@ -314,7 +413,7 @@ static processo_t *so_adiciona_novo_processo(so_t *self, char *nome_do_executave
 
     // Adiciona novo processo na tabela
     adiciona_processo_tabela(self, processo);
-    fila_insere(self->fila_prontos, processo);
+    fila_processos_insere(self->fila_prontos, processo);
     self->processo_corrente = processo;
     self->n_processos++;
 
@@ -324,6 +423,8 @@ static processo_t *so_adiciona_novo_processo(so_t *self, char *nome_do_executave
 }
 
 static int calcula_terminal_processo(int dispositivo, int terminal_base) { return dispositivo + terminal_base; }
+
+// CRIAÇÃO E DESTRUIÇÃO {{{1
 
 static processo_t **tabela_cria(so_t *self)
 {
@@ -353,7 +454,7 @@ so_t *so_cria(cpu_t *cpu, mem_t *mem, es_t *es, console_t *console)
     self->processo_corrente = NULL;
     self->limite_processos = MAX_PROCESSOS;
     self->tabela_processos = tabela_cria(self);
-    self->fila_prontos = fila_cria(free);
+    self->fila_prontos = fila_processos_cria();
 
     self->n_processos = 0;
     self->proximo_pid = 1;
@@ -393,8 +494,9 @@ void so_destroi(so_t *self)
     if (self->tabela_processos != NULL)
         destroi_tabela_processos(self);
 
-    if (self->fila_prontos != NULL)
-        fila_destroi(self->fila_prontos);
+    if (self->fila_prontos != NULL) {
+        fila_processos_destroi(self->fila_prontos);
+    }
 
     cpu_define_chamaC(self->cpu, NULL, NULL);
     free(self);
@@ -406,9 +508,9 @@ void so_destroi(so_t *self)
 static void so_salva_estado_da_cpu(so_t *self);
 static void so_trata_irq(so_t *self, int irq);
 static void so_trata_pendencias(so_t *self);
-static void so_escalona_round_robin(so_t *self);
+static void so_escolhe_e_executa_escalonador(so_t *self, escalonador_t);
 static void so_escalona_simples(so_t *self);
-static void so_escolhe_e_executa_escalonador(so_t *self, escalonador_t escalonador);
+static void so_escalona_round_robin(so_t *self);
 static int so_despacha(so_t *self);
 
 static int so_trata_interrupcao(void *argC, int reg_A)
@@ -425,7 +527,6 @@ static int so_trata_interrupcao(void *argC, int reg_A)
     so_trata_pendencias(self);
     // escolhe o próximo processo a executar
     so_escolhe_e_executa_escalonador(self, ROUND_ROBIN);
-
     // recupera o estado do processo escolhido
     return so_despacha(self);
 }
@@ -453,11 +554,15 @@ static void trata_pendencia_leitura(so_t *self, processo_t *processo)
     }
 
     // Se o teclado ainda estiver ocupado retorna
-    if (estado == 0)
+    if (estado == 0) {
         return;
+    }
 
     console_printf("SO: terminal %d desbloqueado para leitura", processo->terminal);
     desbloqueia_processo(self, processo);
+
+    fila_processos_insere(self->fila_prontos, processo);
+    debug_fila_processos(self->fila_prontos);
 }
 
 static void trata_pendencia_escrita(so_t *self, processo_t *processo)
@@ -470,7 +575,7 @@ static void trata_pendencia_escrita(so_t *self, processo_t *processo)
         return;
     }
 
-    // Se a tela ainda estiver ocupada retorna
+    // Se o dispositivo não estiver disponivel retorna
     if (estado == 0) {
         return;
     }
@@ -486,7 +591,11 @@ static void trata_pendencia_escrita(so_t *self, processo_t *processo)
 
     processo->reg_A = 0;
     desbloqueia_processo(self, processo);
+
+    fila_processos_insere(self->fila_prontos, processo);
+    debug_fila_processos(self->fila_prontos);
 }
+
 static void trata_pendencia_espera_morte(so_t *self, processo_t *processo)
 {
     pid_t pid_esperado = processo->reg_X;
@@ -495,10 +604,12 @@ static void trata_pendencia_espera_morte(so_t *self, processo_t *processo)
     if (processo_esperado->estado_atual == MORTO) {
         console_printf("SO: processo esperado %d morreu", pid_esperado);
         desbloqueia_processo(self, processo);
+
+        fila_processos_insere(self->fila_prontos, processo);
+        debug_fila_processos(self->fila_prontos);
     }
 }
 
-// Percorre a tabela de processos e verifica se as pendencias dos processos bloqueados foram resolvidas
 static void so_trata_pendencias(so_t *self)
 {
     for (int i = 0; i < self->n_processos; i++) {
@@ -563,13 +674,13 @@ static void so_escalona_simples(so_t *self)
     if (proximo != NULL) {
         self->processo_corrente = proximo;
         debug_tabela_processos(self);
-        debug_fila_processos(self->fila_prontos);
         return;
     }
 
     // Se não houver processos prontos, verifica se há processos bloqueados
     if (busca_primeiro_processo_em_estado(self, BLOQUEADO) != NULL) {
         self->processo_corrente = NULL;
+        debug_tabela_processos(self);
         return;
     }
 
@@ -588,14 +699,15 @@ static void so_escalona_round_robin(so_t *self)
     // Se o processo atual ainda não terminou e não possui mais quantum
     if (self->processo_corrente != NULL && self->processo_corrente->estado_atual == PRONTO && self->quantum == 0) {
         // Remove o processo da fila antes de reinserir para evitar duplicatas
-        reorganiza_fila_prontos(self, self->processo_corrente);
+        fila_processos_deleta_processo(self->fila_prontos, self->processo_corrente);
+        fila_processos_insere(self->fila_prontos, self->processo_corrente);
         debug_fila_processos(self->fila_prontos);
     }
 
     // Busca o proximo processo pronto e define como processo corrente
-    if (!fila_vazia(self->fila_prontos)) {
-        // Retira da fila o processo
-        self->processo_corrente = fila_primeiro(self->fila_prontos);
+    if (!fila_processos_vazia(self->fila_prontos)) {
+        // Obtem o primeiro processo pronto da fila de prontos e define como processo corrente
+        self->processo_corrente = fila_processos_primeiro(self->fila_prontos);
         self->quantum = QUANTUM_VALOR;
         debug_fila_processos(self->fila_prontos);
         return;
@@ -630,8 +742,8 @@ static void so_trata_irq_reset(so_t *self);
 static void so_trata_irq_err_cpu(so_t *self);
 static void so_trata_irq_relogio(so_t *self);
 static void so_trata_irq_desconhecida(so_t *self, int irq);
-static void so_trata_irq_chamada_sistema(so_t *self);
 
+static void so_trata_irq_chamada_sistema(so_t *self);
 static void so_trata_irq(so_t *self, int irq)
 {
     // verifica o tipo de interrupção que está acontecendo, e atende de acordo
@@ -701,6 +813,10 @@ static void so_trata_irq_relogio(so_t *self)
         self->quantum--;
         console_printf("SO: decrementando quantum para %d", self->quantum);
     }
+    // t1: deveria tratar a interrupção
+    //   por exemplo, decrementa o quantum do processo corrente, quando se tem
+    //   um escalonador com quantum
+    // console_printf("SO: interrupção do relógio (não tratada)");
 }
 
 // foi gerada uma interrupção para a qual o SO não está preparado
@@ -728,7 +844,6 @@ static void so_trata_irq_chamada_sistema(so_t *self)
         return;
     }
     console_printf("SO: chamada de sistema %d", id_chamada);
-
     switch (id_chamada) {
     case SO_LE:
         so_chamada_le(self);
@@ -789,6 +904,11 @@ static void so_chamada_le(so_t *self)
 // escreve o valor do reg X na saída corrente do processo
 static void so_chamada_escr(so_t *self)
 {
+    // implementação com espera ocupada
+    //   T1: deveria bloquear o processo se dispositivo ocupado
+    // implementação escrevendo direto do terminal A
+    //   T1: deveria usar o dispositivo de saída corrente do processo
+
     int terminal = self->processo_corrente->terminal;
 
     int estado;
@@ -806,6 +926,11 @@ static void so_chamada_escr(so_t *self)
         return;
     }
 
+    // está lendo o valor de X e escrevendo o de A direto onde o processador
+    // colocou/vai pegar T1: deveria usar os registradores do processo que está
+    // realizando a E/S T1: caso o processo tenha sido bloqueado, esse acesso
+    // deve ser realizado em outra execução
+    //   do SO, quando ele verificar que esse acesso já pode ser feito.
     int dado;
     int terminal_tela = calcula_terminal_processo(D_TERM_A_TELA, terminal);
     mem_le(self->mem, IRQ_END_X, &dado);
@@ -968,3 +1093,4 @@ static bool copia_str_da_mem(int tam, char str[tam], mem_t *mem, int ender)
 }
 
 // vim: foldmethod=marker
+
