@@ -23,7 +23,7 @@
 #define MAX_PROCESSOS 5
 #define FATOR_MULTIPLICADOR_LIMITE_PROCESSOS 2
 #define NUM_TERMINAIS 4
-#define QUANTUM_VALOR 50
+#define QUANTUM_VALOR 20
 
 typedef enum
 {
@@ -186,23 +186,51 @@ void debug_fila_processos(fila_t *fila)
     console_printf("===========================\n");
 }
 
-static void desbloqueia_processo(processo_t *processo)
+// Remove um processo da fila de prontos
+static void so_fila_remove_processo(so_t *self, processo_t *processo_alvo)
+{
+    for (int i = 0; i < self->fila_prontos->tamanho; i++) {
+        processo_t *proc = fila_elemento_posicao(self->fila_prontos, i);
+        if (proc == processo_alvo) {
+            fila_remove_posicao(self->fila_prontos, i);
+            return;
+        }
+    }
+    console_printf("SO: processo %d não encontrado na fila de prontos\n", processo_alvo->pid);
+}
+
+void reorganiza_fila_prontos(so_t *self, processo_t *processo)
+{
+    fila_remove(self->fila_prontos);
+    fila_insere(self->fila_prontos, processo);
+    self->processo_corrente = NULL;
+}
+
+static void desbloqueia_processo(so_t *self, processo_t *processo)
 {
     processo->motivo_bloq = SEM_BLOQUEIO;
     processo->estado_atual = PRONTO;
+
+    fila_insere(self->fila_prontos, processo);
+    debug_fila_processos(self->fila_prontos);
 }
 
-static void bloqueia_processo(processo_t *processo, motivo_bloqueio_t motivo)
+static void bloqueia_processo(so_t *self, processo_t *processo, motivo_bloqueio_t motivo)
 {
     processo->motivo_bloq = motivo;
     processo->estado_atual = BLOQUEADO;
+
+    fila_remove(self->fila_prontos);
+    debug_fila_processos(self->fila_prontos);
 }
 
 static void mata_processo(so_t *self, processo_t *processo)
 {
     console_printf("SO: matando processo %d", processo->pid);
     processo->estado_atual = MORTO;
-    fila_remove(self->fila_prontos);
+
+    so_fila_remove_processo(self, processo);
+    debug_fila_processos(self->fila_prontos);
 }
 
 static processo_t *busca_primeiro_processo_em_estado(so_t *self, estado_processo_t estado)
@@ -429,8 +457,7 @@ static void trata_pendencia_leitura(so_t *self, processo_t *processo)
         return;
 
     console_printf("SO: terminal %d desbloqueado para leitura", processo->terminal);
-    desbloqueia_processo(processo);
-    fila_insere(self->fila_prontos, processo);
+    desbloqueia_processo(self, processo);
 }
 
 static void trata_pendencia_escrita(so_t *self, processo_t *processo)
@@ -458,8 +485,7 @@ static void trata_pendencia_escrita(so_t *self, processo_t *processo)
     }
 
     processo->reg_A = 0;
-    desbloqueia_processo(processo);
-    fila_insere(self->fila_prontos, processo);
+    desbloqueia_processo(self, processo);
 }
 static void trata_pendencia_espera_morte(so_t *self, processo_t *processo)
 {
@@ -468,7 +494,7 @@ static void trata_pendencia_espera_morte(so_t *self, processo_t *processo)
 
     if (processo_esperado->estado_atual == MORTO) {
         console_printf("SO: processo esperado %d morreu", pid_esperado);
-        desbloqueia_processo(processo);
+        desbloqueia_processo(self, processo);
     }
 }
 
@@ -504,8 +530,6 @@ static void so_trata_pendencias(so_t *self)
             // Quando um processo é desbloqueado
             if (processo->estado_atual == PRONTO) {
                 console_printf("SO: processo %d desbloqueado", processo->pid);
-                fila_insere(self->fila_prontos, processo);
-                debug_fila_processos(self->fila_prontos);
             }
         }
     }
@@ -555,24 +579,29 @@ static void so_escalona_simples(so_t *self)
 
 static void so_escalona_round_robin(so_t *self)
 {
-    // Verifica se o processo corrente pode continuar executando
+    // Verifica se o processo corrente pode continuar executando e se ainda possui quantum
     if (self->processo_corrente != NULL && self->processo_corrente->estado_atual == PRONTO && self->quantum > 0) {
         // Continua com o processo corrente;
         return;
     }
 
+    // Se o processo atual ainda não terminou e não possui mais quantum
     if (self->processo_corrente != NULL && self->processo_corrente->estado_atual == PRONTO && self->quantum == 0) {
-        fila_insere(self->fila_prontos, self->processo_corrente);
+        // Remove o processo da fila antes de reinserir para evitar duplicatas
+        reorganiza_fila_prontos(self, self->processo_corrente);
+        debug_fila_processos(self->fila_prontos);
     }
 
     // Busca o proximo processo pronto e define como processo corrente
     if (!fila_vazia(self->fila_prontos)) {
-        processo_t *proximo = fila_remove(self->fila_prontos);
-        self->processo_corrente = proximo;
+        // Retira da fila o processo
+        self->processo_corrente = fila_primeiro(self->fila_prontos);
         self->quantum = QUANTUM_VALOR;
+        debug_fila_processos(self->fila_prontos);
         return;
     }
 
+    // Nenhum processo para executar encontrado
     self->processo_corrente = NULL;
 }
 
@@ -601,8 +630,8 @@ static void so_trata_irq_reset(so_t *self);
 static void so_trata_irq_err_cpu(so_t *self);
 static void so_trata_irq_relogio(so_t *self);
 static void so_trata_irq_desconhecida(so_t *self, int irq);
-
 static void so_trata_irq_chamada_sistema(so_t *self);
+
 static void so_trata_irq(so_t *self, int irq)
 {
     // verifica o tipo de interrupção que está acontecendo, e atende de acordo
@@ -741,8 +770,7 @@ static void so_chamada_le(so_t *self)
     // Dispositivo ocupado, bloqueia o processo
     if (estado == 0) {
         console_printf("SO: dispositivo de entrada ocupado");
-        bloqueia_processo(processo, ESPERANDO_LEITURA);
-        fila_remove(self->fila_prontos);
+        bloqueia_processo(self, processo, ESPERANDO_LEITURA);
         return;
     }
 
@@ -774,8 +802,7 @@ static void so_chamada_escr(so_t *self)
     // Se o dispositivo de saida estiver ocupado bloqueia o processo
     if (estado == 0) {
         console_printf("SO: dispositivo de saída ocupado");
-        bloqueia_processo(self->processo_corrente, ESPERANDO_ESCRITA);
-        fila_remove(self->fila_prontos);
+        bloqueia_processo(self, self->processo_corrente, ESPERANDO_ESCRITA);
         return;
     }
 
@@ -878,13 +905,12 @@ static void so_chamada_espera_proc(so_t *self)
     // Se o processo alvo não estiver morto, bloqueia o processo corrente
     processo_t *processo_alvo = busca_processo_pid(self, pid_alvo);
     if (processo_alvo->estado_atual != MORTO) {
-        bloqueia_processo(processo_corrente, ESPERANDO_PROCESSO);
-        fila_remove(self->fila_prontos);
+        bloqueia_processo(self, processo_corrente, ESPERANDO_PROCESSO);
         return;
     }
 
     // Se o processo alvo já estiver morto
-    desbloqueia_processo(processo_corrente);
+    desbloqueia_processo(self, processo_corrente);
     mem_escreve(self->mem, IRQ_END_A, 0);
 }
 

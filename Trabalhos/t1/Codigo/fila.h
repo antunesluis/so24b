@@ -30,5 +30,7 @@ bool fila_insere(fila_t *fila, void *dado);
 void *fila_remove(fila_t *fila);
 void *fila_primeiro(fila_t *fila);
 void fila_imprime(fila_t *fila, void (*imprime_dado)(void *));
+void *fila_remove_posicao(fila_t *fila, int posicao);
+void *fila_elemento_posicao(fila_t *fila, int posicao);
 
 #endif // FILA_H

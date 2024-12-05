@@ -133,3 +133,70 @@ void fila_imprime(fila_t *fila, void (*imprime_dado)(void *))
         atual = atual->proximo;
     }
 }
+
+void *fila_remove_posicao(fila_t *fila, int posicao)
+{
+    if (fila == NULL || fila_vazia(fila)) {
+        console_printf("FILA: Erro ao remover elemento da fila\n");
+        return NULL;
+    }
+
+    // Verifica se a posição é válida
+    if (posicao < 0 || posicao >= fila->tamanho) {
+        console_printf("FILA: Posição inválida\n");
+        return NULL;
+    }
+
+    no_fila_t *atual = fila->inicio;
+    no_fila_t *anterior = NULL;
+
+    // Navega até a posição desejada
+    for (int i = 0; i < posicao; i++) {
+        anterior = atual;
+        atual = atual->proximo;
+    }
+
+    void *dado = atual->dado;
+
+    // Remove o nó da lista
+    if (anterior == NULL) {
+        // Removendo o primeiro elemento
+        fila->inicio = atual->proximo;
+    } else {
+        anterior->proximo = atual->proximo;
+    }
+
+    // Atualiza o ponteiro de fim se necessário
+    if (atual == fila->fim) {
+        fila->fim = anterior;
+    }
+
+    fila->tamanho--;
+    free(atual);
+
+    return dado;
+}
+
+// Retorna o dado de uma posição específica na fila
+void *fila_elemento_posicao(fila_t *fila, int posicao)
+{
+    if (fila == NULL || fila_vazia(fila)) {
+        console_printf("FILA: Erro ao acessar elemento da fila\n");
+        return NULL;
+    }
+
+    // Verifica se a posição é válida
+    if (posicao < 0 || posicao >= fila->tamanho) {
+        console_printf("FILA: Posição inválida\n");
+        return NULL;
+    }
+
+    no_fila_t *atual = fila->inicio;
+
+    // Navega até a posição desejada
+    for (int i = 0; i < posicao; i++) {
+        atual = atual->proximo;
+    }
+
+    return atual->dado;
+}
