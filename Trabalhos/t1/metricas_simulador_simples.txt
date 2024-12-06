@@ -1,0 +1,55 @@
+Número de processos criados: 4
+Instruçẽos para innterrupcao de clock: 50
+Escalonador simples 
+Quantum: 10
+
+==== Relatório de Execução ====
+Número de preempções: 0
+Tempo total de execução: 27661
+Tempo ocioso do sistema: 20.861
+Interrupções de Reset: 1
+Interrupções de Erro de execução: 0
+Interrupções de Chamada de sistema: 462
+Interrupções de E/S: relógio: 560
+Interrupções de E/S: teclado: 0
+Interrupções de E/S: console: 0
+
+Processo PID 1:
+  Tempo de retorno: 13824
+  Preempções: 0
+  Tempo em PRONTO: 3877
+  Tempo em BLOQUEADO: 9947
+  Tempo médio de resposta: 969,00
+  Entradas no estado PRONTO: 4
+  Entradas no estado BLOQUEADO: 3
+  Entradas no estado MORTO: 1
+
+Processo PID 2:
+  Tempo de retorno: 6901
+  Preempções: 0
+  Tempo em PRONTO: 7638
+  Tempo em BLOQUEADO: 737
+  Tempo médio de resposta: 1273,00
+  Entradas no estado PRONTO: 6
+  Entradas no estado BLOQUEADO: 5
+  Entradas no estado MORTO: 1
+
+Processo PID 3:
+  Tempo de retorno: 4843
+  Preempções: 0
+  Tempo em PRONTO: 1362
+  Tempo em BLOQUEADO: 3481
+  Tempo médio de resposta: 64,00
+  Entradas no estado PRONTO: 21
+  Entradas no estado BLOQUEADO: 20
+  Entradas no estado MORTO: 1
+
+Processo PID 4:
+  Tempo de retorno: 10748
+  Preempções: 0
+  Tempo em PRONTO: 4052
+  Tempo em BLOQUEADO: 6696
+  Tempo médio de resposta: 30,00
+  Entradas no estado PRONTO: 132
+  Entradas no estado BLOQUEADO: 131
+  Entradas no estado MORTO: 1

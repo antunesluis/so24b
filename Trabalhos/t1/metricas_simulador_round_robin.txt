@@ -1,0 +1,55 @@
+Número de processos criados: 4
+Instruçẽos para innterrupcao de clock: 50
+Escalonador Round Robin
+Quantum: 10
+
+==== Relatório de Execução ====
+Número de preempções: 24
+Tempo total de execução: 25641
+Tempo ocioso do sistema: 15210
+Interrupções de Reset: 1
+Interrupções de Erro de execução: 0
+Interrupções de Chamada de sistema: 462
+Interrupções de E/S: relógio: 526
+Interrupções de E/S: teclado: 0
+Interrupções de E/S: console: 0
+
+Processo PID 1:
+  Tempo de retorno: 12814
+  Preempções: 0
+  Tempo em PRONTO: 987
+  Tempo em BLOQUEADO: 11827
+  Tempo médio de resposta: 246,00
+  Entradas no estado PRONTO: 4
+  Entradas no estado BLOQUEADO: 2
+  Entradas no estado MORTO: 1
+
+Processo PID 2:
+  Tempo de retorno: 7643
+  Preempções: 19
+  Tempo em PRONTO: 4360
+  Tempo em BLOQUEADO: 3283
+  Tempo médio de resposta: 622,00
+  Entradas no estado PRONTO: 7
+  Entradas no estado BLOQUEADO: 6
+  Entradas no estado MORTO: 1
+
+Processo PID 3:
+  Tempo de retorno: 6789
+  Preempções: 3
+  Tempo em PRONTO: 7622
+  Tempo em BLOQUEADO: 833
+  Tempo médio de resposta: 544,00
+  Entradas no estado PRONTO: 14
+  Entradas no estado BLOQUEADO: 13
+  Entradas no estado MORTO: 1
+
+Processo PID 4:
+  Tempo de retorno: 12805
+  Preempções: 2
+  Tempo em PRONTO: 6480
+  Tempo em BLOQUEADO: 6325
+  Tempo médio de resposta: 53,00
+  Entradas no estado PRONTO: 121
+  Entradas no estado BLOQUEADO: 120
+  Entradas no estado MORTO: 1

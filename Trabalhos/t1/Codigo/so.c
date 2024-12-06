@@ -17,22 +17,24 @@
 #include "irq.h"
 #include "programa.h"
 
-// CONSTANTES E TIPOS {{{1
+// CONSTANTES E TIPOS {{{
 // intervalo entre interrupções do relógio
 #define INTERVALO_INTERRUPCAO 50 // em instruções executadas
-#define MAX_PROCESSOS 5
-#define FATOR_MULTIPLICADOR_LIMITE_PROCESSOS 2
-#define NUM_TERMINAIS 4
-#define FILA_PROCESSOS_INICIAL 5
-#define FATOR_CRESCIMENTO_FILA 2
-#define QUANTUM_INICIAL 15
+#define QUANTUM_INICIAL 10
 #define ESCALONADOR_ATUAL PRIORIDADE
+
+#define FILA_PROCESSOS_INICIAL 5
+#define MAX_PROCESSOS 5
+#define NUM_TERMINAIS 4
+#define FATOR_MULTIPLICADOR_LIMITE_PROCESSOS 2
+#define FATOR_CRESCIMENTO_FILA 2
 
 typedef enum
 {
     PRONTO,
     BLOQUEADO,
     MORTO,
+    N_ESTADO,
 } estado_processo_t;
 
 typedef enum motivo_bloqueio_t
@@ -41,7 +43,27 @@ typedef enum motivo_bloqueio_t
     ESPERANDO_LEITURA,
     ESPERANDO_PROCESSO,
     SEM_BLOQUEIO,
+    N_BLOQUEIO,
 } motivo_bloqueio_t;
+
+typedef struct
+{
+    int processos_criados;
+    int preempcoes;
+    int interrupcoes[N_IRQ]; // Reset, Sistema, CPU Error, Timer
+    int tempo_total_execucao;
+    int tempo_sistema_ocioso;
+} metricas_so_t;
+
+typedef struct
+{
+    int tempo_retorno;
+    int preempcoes;
+    int entradas_estado[N_ESTADO]; // PRONTO, BLOQUEADO, EXECUTANDO
+    int tempo_total_estado[N_ESTADO];
+    float tempo_medio_resposta;
+
+} metricas_processo_t;
 
 typedef struct processo_t
 {
@@ -53,8 +75,9 @@ typedef struct processo_t
     int terminal;
     estado_processo_t estado_atual;
     motivo_bloqueio_t motivo_bloq;
-
     float prioridade_exec;
+
+    metricas_processo_t *metricas;
 } processo_t;
 
 typedef struct
@@ -82,6 +105,8 @@ struct so_t
     int n_processos;
     int proximo_pid;
     int quantum;
+
+    metricas_so_t *metricas;
 };
 
 typedef enum escalonador_t
@@ -94,6 +119,178 @@ typedef enum escalonador_t
 static int so_trata_interrupcao(void *argC, int reg_A);
 static int so_carrega_programa(so_t *self, char *nome_do_executavel);
 static bool copia_str_da_mem(int tam, char str[tam], mem_t *mem, int ender);
+
+// METRICAS {{{1
+
+static metricas_processo_t *cria_metricas_processo()
+{
+    metricas_processo_t *metricas = malloc(sizeof(metricas_processo_t));
+    if (metricas == NULL) {
+        console_printf("Erro ao alocar memória para as métricas do processo\n");
+        exit(EXIT_FAILURE);
+    }
+
+    metricas->tempo_retorno = 0;
+    metricas->preempcoes = 0;
+    metricas->tempo_medio_resposta = 0;
+
+    for (int i = 0; i < N_ESTADO; i++) {
+        metricas->entradas_estado[i] = 0;
+        metricas->tempo_total_estado[i] = 0;
+    }
+
+    // Processo começa em PRONTO
+    metricas->entradas_estado[PRONTO] = 1;
+    return metricas;
+}
+
+static metricas_so_t *cria_metricas_so()
+{
+    metricas_so_t *metricas = malloc(sizeof(metricas_so_t));
+    if (metricas == NULL) {
+        console_printf("Erro ao alocar memória para as métricas globais\n");
+        exit(-1);
+    }
+
+    metricas->processos_criados = 0;
+    metricas->preempcoes = 0;
+    metricas->tempo_total_execucao = 0;
+    metricas->tempo_sistema_ocioso = 0;
+
+    for (int i = 0; i < N_IRQ; i++) {
+        metricas->interrupcoes[i] = 0;
+    }
+    return metricas;
+}
+
+static void processo_atualiza_metricas(so_t *self, processo_t *processo, int tempo_percorrido)
+{
+    if (processo == NULL)
+        return;
+
+    metricas_processo_t *metricas = processo->metricas;
+
+    if (processo->estado_atual != MORTO) {
+        metricas->tempo_retorno += tempo_percorrido;
+    }
+
+    metricas->tempo_total_estado[processo->estado_atual] += tempo_percorrido;
+    metricas->tempo_medio_resposta = (metricas->tempo_total_estado[PRONTO] / metricas->entradas_estado[PRONTO]);
+}
+
+static void so_atualiza_metricas(so_t *self, int tempo_percorrido)
+{
+    self->metricas->tempo_total_execucao += tempo_percorrido;
+
+    if (self->processo_corrente == NULL) {
+        self->metricas->tempo_sistema_ocioso += tempo_percorrido;
+    }
+
+    for (int i = 0; i < self->n_processos; i++) {
+        processo_t *processo = self->tabela_processos[i];
+        if (processo != NULL) {
+            processo_atualiza_metricas(self, processo, tempo_percorrido);
+        }
+    }
+}
+
+static void so_atualiza_metricas_globais(so_t *self, int irq)
+{
+    if (irq < 0 || irq >= N_IRQ) {
+        console_printf("SO: IRQ inválida ao atualizar métricas globais");
+        return;
+    }
+
+    self->metricas->interrupcoes[irq]++;
+
+    int tempo_anterior_execucao = self->metricas->tempo_total_execucao;
+
+    // Atualiza o tempo total de execução com base no relógio
+    if (es_le(self->es, D_RELOGIO_INSTRUCOES, &self->metricas->tempo_total_execucao) != ERR_OK) {
+        console_printf("SO: problema na leitura do relógio");
+        self->erro_interno = true;
+        return;
+    }
+
+    if (tempo_anterior_execucao == 0) {
+        return;
+    }
+
+    int tempo_percorrido = self->metricas->tempo_total_execucao - tempo_anterior_execucao;
+    so_atualiza_metricas(self, tempo_percorrido);
+}
+
+static void finaliza_metricas(so_t *self)
+{
+    self->metricas->processos_criados = self->n_processos;
+
+    for (int i = 0; i < self->n_processos; i++) {
+        processo_t *processo = self->tabela_processos[i];
+        if (processo != NULL) {
+            self->metricas->preempcoes += processo->metricas->preempcoes;
+            self->metricas->tempo_sistema_ocioso += processo->metricas->tempo_total_estado[MORTO];
+        }
+    }
+}
+
+static char *estado_para_string(estado_processo_t estado)
+{
+    switch (estado) {
+    case PRONTO:
+        return "PRONTO";
+    case BLOQUEADO:
+        return "BLOQUEADO";
+    case MORTO:
+        return "MORTO";
+    default:
+        return "DESCONHECIDO";
+    }
+}
+
+static void imprime_metricas_processo(FILE *arq, processo_t *proc)
+{
+    fprintf(arq, "Processo PID %d:\n", proc->pid);
+    fprintf(arq, "  Tempo de retorno: %d\n", proc->metricas->tempo_retorno);
+    fprintf(arq, "  Preempções: %d\n", proc->metricas->preempcoes);
+    fprintf(arq, "  Tempo em PRONTO: %d\n", proc->metricas->tempo_total_estado[PRONTO]);
+    fprintf(arq, "  Tempo em BLOQUEADO: %d\n", proc->metricas->tempo_total_estado[BLOQUEADO]);
+    fprintf(arq, "  Tempo médio de resposta: %.2f\n", proc->metricas->tempo_medio_resposta);
+    for (int j = 0; j < N_ESTADO; j++) {
+        fprintf(arq, "  Entradas no estado %s: %d\n", estado_para_string(j), proc->metricas->entradas_estado[j]);
+    }
+}
+
+static void gera_relatorio_final(so_t *self)
+{
+    FILE *arq = fopen("../metricas_simulador.txt", "w");
+    if (arq == NULL) {
+        console_printf("SO: problema na abertura do arquivo de métricas");
+        return;
+    }
+
+    fprintf(arq, "Número de processos criados: %d\n", self->metricas->processos_criados);
+
+    fprintf(arq, "Instruçẽos para innterrupcao de clock: %d\n", INTERVALO_INTERRUPCAO);
+    fprintf(arq, "Quantum: %d\n", QUANTUM_INICIAL);
+
+    fprintf(arq, "==== Relatório de Execução ====\n");
+    fprintf(arq, "Número de preempções: %d\n", self->metricas->preempcoes);
+    fprintf(arq, "Tempo total de execução: %d\n", self->metricas->tempo_total_execucao);
+    fprintf(arq, "Tempo ocioso do sistema: %d\n", self->metricas->tempo_sistema_ocioso);
+
+    for (int i = 0; i < N_IRQ; i++) {
+        fprintf(arq, "Interrupções de %s: %d\n", irq_nome(i), self->metricas->interrupcoes[i]);
+    }
+
+    for (int i = 0; i < self->n_processos; i++) {
+        processo_t *proc = self->tabela_processos[i];
+        if (proc != NULL) {
+            imprime_metricas_processo(arq, proc);
+        }
+    }
+
+    fclose(arq);
+}
 
 // FILA PRONTOS {{{1
 
@@ -258,6 +455,7 @@ static processo_t *cria_processo(int pid, int pc)
     p->reg_X = 0;
     p->terminal = (pid % NUM_TERMINAIS) * 4;
     p->prioridade_exec = 0.5;
+    p->metricas = cria_metricas_processo();
 
     return p;
 }
@@ -270,20 +468,6 @@ static void destroi_tabela_processos(so_t *self)
         }
     }
     free(self->tabela_processos);
-}
-
-static char *estado_para_string(estado_processo_t estado)
-{
-    switch (estado) {
-    case PRONTO:
-        return "PRONTO";
-    case BLOQUEADO:
-        return "BLOQUEADO";
-    case MORTO:
-        return "MORTO";
-    default:
-        return "DESCONHECIDO";
-    }
 }
 
 static char *motivo_para_string(motivo_bloqueio_t motivo)
@@ -348,6 +532,7 @@ static void desbloqueia_processo(so_t *self, processo_t *processo)
 
     processo->motivo_bloq = SEM_BLOQUEIO;
     processo->estado_atual = PRONTO;
+    processo->metricas->entradas_estado[PRONTO]++;
 }
 
 static void bloqueia_processo(so_t *self, processo_t *processo, motivo_bloqueio_t motivo)
@@ -357,6 +542,7 @@ static void bloqueia_processo(so_t *self, processo_t *processo, motivo_bloqueio_
 
     processo->motivo_bloq = motivo;
     processo->estado_atual = BLOQUEADO;
+    processo->metricas->entradas_estado[BLOQUEADO]++;
 
     fila_processos_remove(self->fila_prontos);
     atualiza_prioridade_processo(self, processo);
@@ -370,8 +556,20 @@ static void mata_processo(so_t *self, processo_t *processo)
 
     console_printf("SO: matando processo %d", processo->pid);
     processo->estado_atual = MORTO;
+    processo->metricas->entradas_estado[MORTO]++;
 
     fila_processos_deleta_processo(self->fila_prontos, processo);
+}
+
+static bool verifica_todos_processos_mortos(so_t *self)
+{
+    for (int i = 0; i < self->n_processos; i++) {
+        processo_t *processo = self->tabela_processos[i];
+        if (processo != NULL && processo->estado_atual != MORTO) {
+            return false;
+        }
+    }
+    return true;
 }
 
 static processo_t *busca_primeiro_processo_em_estado(so_t *self, estado_processo_t estado)
@@ -439,7 +637,7 @@ static void adiciona_processo_tabela(so_t *self, processo_t *processo)
         }
     }
     console_printf("SO: Erro ao adicionar processo na tabela\n");
-    mem_escreve(self->mem, IRQ_END_A, -1);
+    self->processo_corrente->reg_A = -1;
 }
 
 // Instancia e adiciona na tabela um novo processo
@@ -470,8 +668,8 @@ static processo_t *so_adiciona_novo_processo(so_t *self, char *nome_do_executave
     self->processo_corrente = processo;
     self->n_processos++;
 
-    debug_tabela_processos(self);
-    // debug_fila_processos(self->fila_prontos);
+    // debug_tabela_processos(self);
+    //  debug_fila_processos(self->fila_prontos);
     return processo;
 }
 
@@ -512,6 +710,7 @@ so_t *so_cria(cpu_t *cpu, mem_t *mem, es_t *es, console_t *console)
     self->n_processos = 0;
     self->proximo_pid = 1;
     self->quantum = QUANTUM_INICIAL;
+    self->metricas = cria_metricas_so();
 
     cpu_define_chamaC(self->cpu, so_trata_interrupcao, self);
 
@@ -555,16 +754,31 @@ static void so_escolhe_e_executa_escalonador(so_t *self, escalonador_t);
 static void so_escalona_simples(so_t *self);
 static void so_escalona_round_robin(so_t *self);
 static void so_escalona_prioridade(so_t *self);
+static void so_encerra_atividade(so_t *self);
 static int so_despacha(so_t *self);
+
+static void so_encerra_atividade(so_t *self)
+{
+    console_printf("SO: encerrando atividades");
+    finaliza_metricas(self);
+    gera_relatorio_final(self);
+    so_destroi(self);
+}
 
 static int so_trata_interrupcao(void *argC, int reg_A)
 {
     irq_t irq = reg_A;
     so_t *self = argC;
+
+    // Atualizo todas as métricas do simulador e dos processos atuais.
+    so_atualiza_metricas_globais(self, irq);
+
     // esse print polui bastante, recomendo tirar quando estiver com mais confiança
     // console_printf("SO: recebi IRQ %d (%s)", irq, irq_nome(irq));
+
     // salva o estado da cpu no descritor do processo que foi interrompido
     so_salva_estado_da_cpu(self);
+
     // faz o atendimento da interrupção
     so_trata_irq(self, irq);
     // faz o processamento independente da interrupção
@@ -572,6 +786,16 @@ static int so_trata_interrupcao(void *argC, int reg_A)
     // escolhe o próximo processo a executar
     so_escolhe_e_executa_escalonador(self, ESCALONADOR_ATUAL);
     // recupera o estado do processo escolhido
+
+    if (verifica_todos_processos_mortos(self)) {
+        so_encerra_atividade(self);
+    }
+
+    if (self->erro_interno) {
+        console_printf("SO: erro interno detectado, encerrando atividades");
+        exit(-1);
+    }
+
     return so_despacha(self);
 }
 
@@ -731,18 +955,23 @@ static void so_escalona_simples(so_t *self)
 
 static void so_escalona_round_robin(so_t *self)
 {
+    processo_t *processo_corrente = self->processo_corrente;
     // Verifica se o processo corrente pode continuar executando e se ainda possui quantum
-    if (self->processo_corrente != NULL && self->processo_corrente->estado_atual == PRONTO && self->quantum > 0) {
+    if (processo_corrente != NULL && processo_corrente->estado_atual == PRONTO && self->quantum > 0) {
         // Continua com o processo corrente;
         return;
     }
 
     // Se o processo atual ainda não terminou e não possui mais quantum
-    if (self->processo_corrente != NULL && self->processo_corrente->estado_atual == PRONTO && self->quantum == 0) {
+    if (processo_corrente != NULL && processo_corrente->estado_atual == PRONTO && self->quantum == 0) {
         // Remove o processo da fila antes de reinserir para evitar duplicatas
-        fila_processos_deleta_processo(self->fila_prontos, self->processo_corrente);
-        fila_processos_insere(self->fila_prontos, self->processo_corrente);
-        // debug_fila_processos(self->fila_prontos);
+        fila_processos_deleta_processo(self->fila_prontos, processo_corrente);
+        fila_processos_insere(self->fila_prontos, processo_corrente);
+
+        // Buscas na fila resultam em preempcoes
+        processo_corrente->metricas->preempcoes++;
+
+        debug_fila_processos(self->fila_prontos);
     }
 
     // Busca o proximo processo pronto e define como processo corrente
@@ -760,25 +989,30 @@ static void so_escalona_round_robin(so_t *self)
 
 static void so_escalona_prioridade(so_t *self)
 {
+    processo_t *processo_corrente = self->processo_corrente;
     // Verifica se o processo corrente pode continuar executando e se ainda possui quantum
-    if (self->processo_corrente != NULL && self->processo_corrente->estado_atual == PRONTO && self->quantum > 0) {
+    if (processo_corrente != NULL && processo_corrente->estado_atual == PRONTO && self->quantum > 0) {
         // Continua com o processo corrente;
         return;
     }
 
     // Se o processo atual ainda não terminou e não possui mais quantum
-    if (self->processo_corrente != NULL && self->processo_corrente->estado_atual == PRONTO && self->quantum == 0) {
+    if (processo_corrente != NULL && processo_corrente->estado_atual == PRONTO && self->quantum == 0) {
         // Remove o processo da fila antes de reinserir para evitar duplicatas
-        fila_processos_deleta_processo(self->fila_prontos, self->processo_corrente);
-        fila_processos_insere(self->fila_prontos, self->processo_corrente);
+        fila_processos_deleta_processo(self->fila_prontos, processo_corrente);
+        fila_processos_insere(self->fila_prontos, processo_corrente);
+
+        // Buscas na fila resultam em preempcoes
+        processo_corrente->metricas->preempcoes++;
+
         // debug_fila_processos(self->fila_prontos);
     }
 
     // Busca o proximo processo pronto e define como processo corrente
     if (!fila_processos_vazia(self->fila_prontos)) {
         fila_processos_ordena_prioridade(self->fila_prontos);
-        debug_fila_processos(self->fila_prontos);
-        // Obtem o primeiro processo pronto da fila de prontos e define como processo corrente
+        // debug_fila_processos(self->fila_prontos);
+        //  Obtem o primeiro processo pronto da fila de prontos e define como processo corrente
         self->processo_corrente = fila_processos_primeiro(self->fila_prontos);
         self->quantum = QUANTUM_INICIAL;
         return;
@@ -813,6 +1047,7 @@ static void so_trata_irq_relogio(so_t *self);
 static void so_trata_irq_desconhecida(so_t *self, int irq);
 
 static void so_trata_irq_chamada_sistema(so_t *self);
+
 static void so_trata_irq(so_t *self, int irq)
 {
     // verifica o tipo de interrupção que está acontecendo, e atende de acordo
@@ -847,7 +1082,6 @@ static void so_trata_irq_reset(so_t *self)
     }
 
     // altera o PC para o endereço de carga
-    mem_escreve(self->mem, IRQ_END_PC, init_processo->pc);
     mem_escreve(self->mem, IRQ_END_modo, usuario);
 }
 
@@ -961,7 +1195,8 @@ static void so_chamada_le(so_t *self)
         self->erro_interno = true;
         return;
     }
-    mem_escreve(self->mem, IRQ_END_A, dado);
+
+    processo->reg_A = dado;
 }
 
 // implementação da chamada se sistema SO_ESCR
@@ -969,6 +1204,7 @@ static void so_chamada_le(so_t *self)
 static void so_chamada_escr(so_t *self)
 {
     int terminal = self->processo_corrente->terminal;
+    processo_t *processo = self->processo_corrente;
 
     int estado;
     int terminal_tela_ok = calcula_terminal_processo(D_TERM_A_TELA_OK, terminal);
@@ -981,7 +1217,7 @@ static void so_chamada_escr(so_t *self)
     // Se o dispositivo de saida estiver ocupado bloqueia o processo
     if (estado == 0) {
         console_printf("SO: dispositivo de saída ocupado");
-        bloqueia_processo(self, self->processo_corrente, ESPERANDO_ESCRITA);
+        bloqueia_processo(self, processo, ESPERANDO_ESCRITA);
         return;
     }
 
@@ -994,7 +1230,7 @@ static void so_chamada_escr(so_t *self)
         return;
     }
 
-    mem_escreve(self->mem, IRQ_END_A, 0);
+    processo->reg_A = 0;
 }
 
 // implementação da chamada se sistema SO_CRIA_PROC cria um processo
@@ -1008,7 +1244,7 @@ static void so_chamada_cria_proc(so_t *self)
     int ender_nome_arq;
     if (mem_le(self->mem, IRQ_END_X, &ender_nome_arq) != ERR_OK) {
         console_printf("SO: Erro ao obter o endereço do nome do programa\n");
-        mem_escreve(self->mem, IRQ_END_A, -1);
+        processo_corrente->reg_A = -1;
         return;
     }
 
@@ -1016,14 +1252,14 @@ static void so_chamada_cria_proc(so_t *self)
     // Copia o valor do registrador X do processo para a memória
     if (!copia_str_da_mem(100, nome, self->mem, ender_nome_arq)) {
         console_printf("SO: Erro ao copiar o nome do arquivo do processo\n");
-        mem_escreve(self->mem, IRQ_END_A, -1);
+        processo_corrente->reg_A = -1;
         return;
     }
 
     processo_t *novo_processo = so_adiciona_novo_processo(self, nome);
     if (novo_processo == NULL) {
         console_printf("SO: Erro ao criar o processo\n");
-        mem_escreve(self->mem, IRQ_END_A, -1);
+        processo_corrente->reg_A = -1;
         return;
     }
 
@@ -1044,7 +1280,6 @@ static void so_chamada_mata_proc(so_t *self)
 
     // Processo que deve ser morto é o processo corrente
     if (pid_alvo == 0) {
-        processo_alvo = processo_corrente;
         mata_processo(self, processo_corrente);
         processo_corrente->reg_A = 0;
         self->processo_corrente = NULL;
@@ -1059,7 +1294,7 @@ static void so_chamada_mata_proc(so_t *self)
     }
 
     console_printf("SO: processo %d não encontrado", pid_alvo);
-    mem_escreve(self->mem, IRQ_END_A, -1);
+    processo_corrente->reg_A = -1;
 }
 
 // implementação da chamada se sistema SO_ESPERA_PROC espera o fim do processo com pid X
@@ -1073,7 +1308,7 @@ static void so_chamada_espera_proc(so_t *self)
     // Verifica se o processo corrente está esperando por si mesmo
     if (pid_alvo == processo_corrente->pid) {
         console_printf("SO: processo %d não pode esperar por si mesmo", pid_alvo);
-        mem_escreve(self->mem, IRQ_END_A, -1);
+        processo_corrente->reg_A = -1;
         return;
     }
 
@@ -1086,7 +1321,7 @@ static void so_chamada_espera_proc(so_t *self)
 
     // Se o processo alvo já estiver morto
     desbloqueia_processo(self, processo_corrente);
-    mem_escreve(self->mem, IRQ_END_A, 0);
+    processo_corrente->reg_A = 0;
 }
 
 // CARGA DE PROGRAMA {{{1
