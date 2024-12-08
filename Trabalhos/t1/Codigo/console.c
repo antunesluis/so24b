@@ -20,8 +20,8 @@
 
 // tamanho da tela -- a janela do terminal tem que ter pelo menos esse tamanho
 // altere caso queira mais linhas (ou menos)
-#define N_LIN 24 // número de linhas na tela
-#define N_COL 80 // número de colunas na tela
+#define N_LIN 40  // número de linhas na tela
+#define N_COL 140 // número de colunas na tela
 
 // número de linhas para cada componente da tela
 #define N_TERM 4 // número de terminais, cada um ocupa 2 linhas na tela
