@@ -191,7 +191,13 @@ static void destroi_tabela_processos(so_t *self)
     free(self->tabela_processos);
 }
 
-static void so_processa_desbloqueio_proc(so_t *self, processo_t *processo) { processo_desbloqueia(processo); }
+static void so_processa_desbloqueio_proc(so_t *self, processo_t *processo, bool insere_fim_fila)
+{
+    processo_desbloqueia(processo);
+    if (insere_fim_fila) {
+        fila_processos_insere(self->fila_prontos, processo);
+    }
+}
 
 static void so_processa_bloqueio_proc(so_t *self, processo_t *processo, motivo_bloqueio_t motivo)
 {
@@ -438,8 +444,16 @@ static void trata_pendencia_leitura(so_t *self, processo_t *processo)
     }
     console_printf("SO: terminal %d desbloqueado para leitura", processo_get_terminal(processo));
 
-    so_processa_desbloqueio_proc(self, processo);
-    fila_processos_insere(self->fila_prontos, processo);
+    int dado;
+    int terminal_leitura = processo_calcula_terminal(D_TERM_A_TECLADO, processo_get_terminal(processo));
+    if (es_le(self->es, terminal_leitura, &dado) != ERR_OK) {
+        console_printf("SO: problema no acesso ao teclado");
+        self->erro_interno = true;
+        return;
+    }
+
+    processo_set_reg_A(processo, dado);
+    so_processa_desbloqueio_proc(self, processo, true);
 }
 
 static void trata_pendencia_escrita(so_t *self, processo_t *processo)
@@ -469,19 +483,17 @@ static void trata_pendencia_escrita(so_t *self, processo_t *processo)
     }
 
     processo_set_reg_X(processo, 0);
-    so_processa_desbloqueio_proc(self, processo);
-    fila_processos_insere(self->fila_prontos, processo);
+    so_processa_desbloqueio_proc(self, processo, true);
 }
 
 static void trata_pendencia_espera_morte(so_t *self, processo_t *processo)
 {
     pid_t pid_esperado = processo_get_reg_X(processo);
-    processo_t *processo_esperado = processo_busca_por_pid(self->tabela_processos, self->n_processos, pid_esperado);
+    processo_t *proc_esperado = processo_busca_por_pid(self->tabela_processos, self->n_processos, pid_esperado);
 
-    if (processo_get_estado(processo_esperado) == MORTO) {
+    if (processo_get_estado(proc_esperado) == MORTO) {
         console_printf("SO: processo esperado %d morreu", pid_esperado);
-        so_processa_desbloqueio_proc(self, processo);
-        fila_processos_insere(self->fila_prontos, processo);
+        so_processa_desbloqueio_proc(self, processo, true);
     }
 }
 
@@ -929,7 +941,7 @@ static void so_chamada_espera_proc(so_t *self)
     }
 
     // Se o processo alvo já estiver morto
-    so_processa_desbloqueio_proc(self, processo_corrente);
+    so_processa_desbloqueio_proc(self, processo_corrente, false);
     processo_set_reg_A(processo_corrente, 0);
 }
 
