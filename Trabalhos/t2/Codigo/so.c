@@ -489,20 +489,16 @@ static int so_trata_interrupcao(void *argC, int reg_A)
 
     // Atualizo todas as métricas do simulador e dos processos atuais.
     so_atualiza_metricas_globais(self, irq);
-
     // esse print polui bastante, recomendo tirar quando estiver com mais confiança
     console_printf("SO: recebi IRQ %d (%s)", irq, irq_nome(irq));
-
     // salva o estado da cpu no descritor do processo que foi interrompido
     so_salva_estado_da_cpu(self);
-
     // faz o atendimento da interrupção
     so_trata_irq(self, irq);
     // faz o processamento independente da interrupção
     so_trata_pendencias(self);
     // escolhe o próximo processo a executar
     so_escolhe_e_executa_escalonador(self, ESCALONADOR_ATUAL);
-    // recupera o estado do processo escolhido
 
     if (processo_verifica_todos_mortos(self->tabela_processos, self->n_processos)) {
         so_encerra_atividade(self);
@@ -536,21 +532,21 @@ static void so_salva_estado_da_cpu(so_t *self)
     processo_set_erro(processo_corrente, err);
 }
 
-/* static int escolhe_pagina_substituir(so_t *self) */
-/* { */
-/*     switch (ALGORITMO_SUBSTITUICAO_ATUAL) { */
-/*     case FIFO: */
-/*         console_printf("SO: escolhendo página para substituir com FIFO"); */
-/*         break; */
-/*     case SEGUNDA_CHANCE: */
-/*         console_printf("SO: escolhendo página para substituir com Segunda Chance"); */
-/*         break; */
-/*     default: */
-/*         console_printf("SO: algoritmo de substituição de página não reconhecido"); */
-/*         break; */
-/*     } */
-/*     return -1; */
-/* } */
+static int escolhe_pagina_substituir(so_t *self)
+{
+    switch (ALGORITMO_SUBSTITUICAO_ATUAL) {
+    case FIFO:
+        console_printf("SO: escolhendo página para substituir com FIFO");
+        break;
+    case SEGUNDA_CHANCE:
+        console_printf("SO: escolhendo página para substituir com Segunda Chance");
+        break;
+    default:
+        console_printf("SO: algoritmo de substituição de página não reconhecido");
+        break;
+    }
+    return -1;
+}
 
 static bool transfere_pag_para_quadro(so_t *self, int end_mem_sec, int quadro_livre, int end_virt_ini, int end_virt_fim)
 {
@@ -605,7 +601,11 @@ static bool trata_falha_pagina_bloco_livre(so_t *self, int end_ausente)
 static void trata_falha_pagina_substituicao(so_t *self, int end_ausente)
 {
     console_printf("SO: tratando página ausente");
-    /* int pagina_removida = escolhe_pagina_substituir(self); */
+    int pagina_removida = escolhe_pagina_substituir(self);
+    if (pagina_removida == -1) {
+        console_printf("SO: problema ao escolher página para substituir");
+        return;
+    }
 }
 
 static void so_trata_falha_pagina(so_t *self)
@@ -615,11 +615,9 @@ static void so_trata_falha_pagina(so_t *self)
 
     // Verifica se existe bloco disponivel na memoria principal para importar da memoria secundária
     if (gere_blocos_tem_disponivel(self->gere_blocos)) {
-        // Transfere a página da memória secundária para o bloco disponivel na memória principal
         console_printf("SO: bloco disponível na memória principal");
-
+        // Transfere a página da memória secundária para o bloco disponivel na memória principal
         trata_falha_pagina_bloco_livre(self, end_ausente);
-        return;
     } else {
         console_printf("SO: substituindo página na memória principal");
         // Substitui uma página da memória principal por uma da memória sec
@@ -924,6 +922,7 @@ static void so_trata_irq_reset(so_t *self)
         self->erro_interno = true;
         return;
     }
+
     console_printf("SO: processo inicial criado");
 
     // altera o PC para o endereço de carga (deve ter sido o endereço virtual 0)
