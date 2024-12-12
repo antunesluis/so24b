@@ -20,11 +20,16 @@ struct processo
     int pc;
     int reg_A;
     int reg_X;
+    int complemento;
+    int erro;
 
     int terminal;
     estado_processo_t estado_atual;
     motivo_bloqueio_t motivo_bloq;
     float prioridade_exec;
+
+    int endereco_mem_sec;
+    tabpag_t *tabpag;
 
     metricas_processo_t *metricas;
 };
@@ -62,11 +67,21 @@ processo_t *processo_cria(int pid, int pc)
     p->pid = pid;
     p->estado_atual = PRONTO;
     p->motivo_bloq = SEM_BLOQUEIO;
+
     p->pc = pc;
     p->reg_A = 0;
     p->reg_X = 0;
+    p->complemento = 0;
+    p->erro = ERR_OK;
     p->terminal = (pid % NUM_TERMINAIS) * 4;
+
     p->prioridade_exec = 0.5;
+    p->endereco_mem_sec = 0;
+
+    p->tabpag = tabpag_cria();
+    if (p->tabpag == NULL) {
+        console_printf("Erro ao criar tabela de páginas para o processo %d\n", pid);
+    }
 
     p->metricas = cria_metricas_processo();
 
@@ -86,11 +101,15 @@ int processo_get_pid(processo_t *processo) { return processo->pid; }
 int processo_get_pc(processo_t *processo) { return processo->pc; }
 int processo_get_reg_A(processo_t *processo) { return processo->reg_A; }
 int processo_get_reg_X(processo_t *processo) { return processo->reg_X; }
+int processo_get_complemento(processo_t *processo) { return processo->complemento; }
+int processo_get_erro(processo_t *processo) { return processo->erro; }
 int processo_get_terminal(processo_t *processo) { return processo->terminal; }
 estado_processo_t processo_get_estado(processo_t *processo) { return processo->estado_atual; }
 motivo_bloqueio_t processo_get_motivo_bloqueio(processo_t *processo) { return processo->motivo_bloq; }
 float processo_get_prioridade(processo_t *processo) { return processo->prioridade_exec; }
+tabpag_t *processo_get_tabpag(processo_t *processo) { return processo->tabpag; }
 int processo_get_preempcoes(processo_t *processo) { return processo->metricas->preempcoes; }
+int processo_get_end_mem_sec(processo_t *processo) { return processo->endereco_mem_sec; }
 int processo_get_tempo_em_estado(processo_t *processo, estado_processo_t estado)
 {
     return processo->metricas->tempo_total_estado[estado];
@@ -100,9 +119,12 @@ int processo_get_tempo_em_estado(processo_t *processo, estado_processo_t estado)
 void processo_set_pc(processo_t *processo, int pc) { processo->pc = pc; }
 void processo_set_reg_A(processo_t *processo, int reg_A) { processo->reg_A = reg_A; }
 void processo_set_reg_X(processo_t *processo, int reg_X) { processo->reg_X = reg_X; }
+void processo_set_complemento(processo_t *processo, int complemento) { processo->complemento = complemento; }
+void processo_set_erro(processo_t *processo, int erro) { processo->erro = erro; }
 void processo_set_estado(processo_t *processo, estado_processo_t estado) { processo->estado_atual = estado; }
 void processo_set_motivo_bloqueio(processo_t *processo, motivo_bloqueio_t motivo) { processo->motivo_bloq = motivo; }
 void processo_set_prioridade(processo_t *processo, float prioridade) { processo->prioridade_exec = prioridade; }
+void processo_set_end_mem_sec(processo_t *processo, int endereco) { processo->endereco_mem_sec = endereco; }
 
 // Métodos de estado
 void processo_bloqueia(processo_t *processo, motivo_bloqueio_t motivo)

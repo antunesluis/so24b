@@ -1,6 +1,7 @@
 #ifndef PROCESSO_H
 #define PROCESSO_H
 
+#include "tabpag.h"
 #include <stdbool.h>
 #include <stdio.h>
 
@@ -18,6 +19,7 @@ typedef enum
     ESPERANDO_ESCRITA,
     ESPERANDO_LEITURA,
     ESPERANDO_PROCESSO,
+    ESPERANDO_PAGINA,
     SEM_BLOQUEIO,
     N_BLOQUEIO
 } motivo_bloqueio_t;
@@ -40,6 +42,10 @@ motivo_bloqueio_t processo_get_motivo_bloqueio(processo_t *processo);
 float processo_get_prioridade(processo_t *processo);
 int processo_get_preempcoes(processo_t *processo);
 int processo_get_tempo_em_estado(processo_t *processo, estado_processo_t estado);
+int processo_get_complemento(processo_t *processo);
+int processo_get_erro(processo_t *processo);
+tabpag_t *processo_get_tabpag(processo_t *processo);
+int processo_get_end_mem_sec(processo_t *processo);
 
 // Setters
 void processo_set_pc(processo_t *processo, int pc);
@@ -48,6 +54,9 @@ void processo_set_reg_X(processo_t *processo, int reg_X);
 void processo_set_estado(processo_t *processo, estado_processo_t estado);
 void processo_set_motivo_bloqueio(processo_t *processo, motivo_bloqueio_t motivo);
 void processo_set_prioridade(processo_t *processo, float prioridade);
+void processo_set_complemento(processo_t *processo, int complemento);
+void processo_set_erro(processo_t *processo, int erro);
+void processo_set_end_mem_sec(processo_t *processo, int endereco);
 
 // Métodos de estado
 void processo_bloqueia(processo_t *processo, motivo_bloqueio_t motivo);
@@ -72,4 +81,3 @@ void incrementa_preempcoes_processo(processo_t *processo);
 void debug_tabela_processos(processo_t **tabela_processos, int limite_processos);
 
 #endif // PROCESSO_H
-
