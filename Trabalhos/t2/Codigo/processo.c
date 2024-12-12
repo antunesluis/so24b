@@ -31,6 +31,7 @@ struct processo
     int endereco_mem_sec;
     tabpag_t *tabpag;
 
+    int tempo_desbloquio;
     metricas_processo_t *metricas;
 };
 
@@ -77,6 +78,7 @@ processo_t *processo_cria(int pid, int pc)
 
     p->prioridade_exec = 0.5;
     p->endereco_mem_sec = 0;
+    p->tempo_desbloquio = 0;
 
     p->tabpag = tabpag_cria();
     if (p->tabpag == NULL) {
@@ -110,6 +112,7 @@ float processo_get_prioridade(processo_t *processo) { return processo->prioridad
 tabpag_t *processo_get_tabpag(processo_t *processo) { return processo->tabpag; }
 int processo_get_preempcoes(processo_t *processo) { return processo->metricas->preempcoes; }
 int processo_get_end_mem_sec(processo_t *processo) { return processo->endereco_mem_sec; }
+int processo_get_tempo_desbloqueio(processo_t *processo) { return processo->tempo_desbloquio; }
 int processo_get_tempo_em_estado(processo_t *processo, estado_processo_t estado)
 {
     return processo->metricas->tempo_total_estado[estado];
@@ -124,6 +127,10 @@ void processo_set_erro(processo_t *processo, int erro) { processo->erro = erro; 
 void processo_set_estado(processo_t *processo, estado_processo_t estado) { processo->estado_atual = estado; }
 void processo_set_motivo_bloqueio(processo_t *processo, motivo_bloqueio_t motivo) { processo->motivo_bloq = motivo; }
 void processo_set_prioridade(processo_t *processo, float prioridade) { processo->prioridade_exec = prioridade; }
+void processo_set_tempo_desbloqueio(processo_t *processo, int tempo_desbloqueio)
+{
+    processo->tempo_desbloquio = tempo_desbloqueio;
+}
 void processo_set_end_mem_sec(processo_t *processo, int endereco) { processo->endereco_mem_sec = endereco; }
 
 // Métodos de estado

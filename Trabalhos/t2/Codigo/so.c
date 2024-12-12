@@ -39,6 +39,8 @@
 #define TAMANHO_MEMORIA_SECUNDARIA = 10000
 #define TOTAL_QUADROS_MEMORIA = 100
 
+#define TEMPO_MUDANCA_PAGINA_CPU 5
+
 // Não tem processos nem memória virtual, mas é preciso usar a paginação,
 //   pelo menos para implementar relocação, já que os programas estão sendo
 //   todos montados para serem executados no endereço 0 e o endereço 0
@@ -353,12 +355,10 @@ static void so_processa_bloqueio_proc(so_t *self, processo_t *processo, motivo_b
     processo_bloqueia(processo, motivo);
 
     if (motivo == ESPERANDO_PAGINA) {
-        processo_set_end_mem_sec(processo, self->prox_endereco_mem_sec);
-        self->prox_endereco_mem_sec += processo_get_complemento(processo);
+        processo_set_tempo_desbloqueio(processo, TEMPO_MUDANCA_PAGINA_CPU);
     }
 
     fila_processos_remove(self->fila_prontos);
-
     processo_atualiza_prioridade(processo, self->quantum);
 }
 
@@ -705,9 +705,8 @@ static void trata_pendencia_espera_morte(so_t *self, processo_t *processo)
 
 static void so_trata_pendencia_pagina(so_t *self, processo_t *processo)
 {
-    if (processo_get_motivo_bloqueio(processo) == ESPERANDO_ESCRITA) {
+    if (processo_get_tempo_desbloqueio(processo) < tempo_atual_sistema(self)) {
         so_processa_desbloqueio_proc(self, processo, true);
-        return;
     }
 }
 
@@ -736,11 +735,11 @@ static void so_trata_pendencias(so_t *self)
                 // Verifica se a memória secundária está disponível
                 so_trata_pendencia_pagina(self, processo);
                 break;
-            case SEM_BLOQUEIO:
                 break;
             default:
                 console_printf("SO: motivo de bloqueio desconhecido");
                 self->erro_interno = true;
+            case SEM_BLOQUEIO:
             }
         }
     }

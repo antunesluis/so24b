@@ -46,6 +46,7 @@ int processo_get_complemento(processo_t *processo);
 int processo_get_erro(processo_t *processo);
 tabpag_t *processo_get_tabpag(processo_t *processo);
 int processo_get_end_mem_sec(processo_t *processo);
+int processo_get_tempo_desbloqueio(processo_t *processo);
 
 // Setters
 void processo_set_pc(processo_t *processo, int pc);
@@ -57,6 +58,7 @@ void processo_set_prioridade(processo_t *processo, float prioridade);
 void processo_set_complemento(processo_t *processo, int complemento);
 void processo_set_erro(processo_t *processo, int erro);
 void processo_set_end_mem_sec(processo_t *processo, int endereco);
+void processo_set_tempo_desbloqueio(processo_t *processo, int tempo_desbloqueio);
 
 // Métodos de estado
 void processo_bloqueia(processo_t *processo, motivo_bloqueio_t motivo);
