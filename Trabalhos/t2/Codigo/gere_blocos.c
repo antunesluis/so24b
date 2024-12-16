@@ -3,6 +3,8 @@
 #include "mmu.h"
 #include <stdlib.h>
 
+#define ESPACO_CPU 10
+
 gere_blocos_t *gere_blocos_cria(int tam)
 {
     gere_blocos_t *gerenciador = malloc(sizeof(gere_blocos_t));
@@ -20,7 +22,7 @@ gere_blocos_t *gere_blocos_cria(int tam)
 
     gerenciador->total_blocos = tam;
     for (int i = 0; i < tam; i++) {
-        if (i < 1) {
+        if (i < ESPACO_CPU) {
             gerenciador->blocos[i].em_uso = true;
             continue;
         }

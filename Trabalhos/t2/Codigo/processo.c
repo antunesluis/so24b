@@ -254,6 +254,8 @@ char *processo_motivo_para_string(motivo_bloqueio_t motivo)
         return "ESPERANDO_LEITURA";
     case ESPERANDO_PROCESSO:
         return "ESPERANDO_PROCESSO";
+    case ESPERANDO_PAGINA:
+        return "ESPERANDO_PAGINA";
     case SEM_BLOQUEIO:
         return "SEM_BLOQUEIO";
     default:

@@ -28,7 +28,7 @@
 
 #define INTERVALO_INTERRUPCAO 50
 #define QUANTUM_INICIAL 10
-#define ESCALONADOR_ATUAL SIMPLES
+#define ESCALONADOR_ATUAL FIFO
 #define ALGORITMO_SUBSTITUICAO_ATUAL SIMPLES
 
 #define FILA_PROCESSOS_INICIAL 5
@@ -38,9 +38,8 @@
 #define FATOR_CRESCIMENTO_FILA 2
 
 #define TAMANHO_MEMORIA_SECUNDARIA = 10000
-#define TOTAL_QUADROS_MEMORIA = 100
-
 #define TEMPO_MUDANCA_PAGINA_CPU 2
+#define ERR_PAGINA_INVALIDA -1
 
 // Não tem processos nem memória virtual, mas é preciso usar a paginação,
 //   pelo menos para implementar relocação, já que os programas estão sendo
@@ -524,9 +523,9 @@ static void so_salva_estado_da_cpu(so_t *self)
 
     // Obtem os registradores salvos da interrupção anterior e atualiza o estado do processo
     int pc, reg_A, reg_X, complemento, err;
-    mem_le(self->mem, IRQ_END_PC, &pc);
     mem_le(self->mem, IRQ_END_A, &reg_A);
     mem_le(self->mem, IRQ_END_X, &reg_X);
+    mem_le(self->mem, IRQ_END_PC, &pc);
     mem_le(self->mem, IRQ_END_complemento, &complemento);
     mem_le(self->mem, IRQ_END_erro, &err);
 
@@ -553,44 +552,74 @@ static int escolhe_pagina_substituir(so_t *self)
     return -1;
 }
 
-static bool transf_pag_mem_sec_para_mem_princ(so_t *self, int end_mem_sec, int quadro_livre, int end_virt_ini,
-                                              int end_virt_fim)
+static bool transf_pag_mem_sec_para_mem_princ(so_t *self, int end_mem_sec, int quadro_livre)
 {
-    for (int end_virt = end_virt_ini; end_virt <= end_virt_fim; end_virt++) {
+    // Percorro o tamanho da pagina movendo cada posição para mememoria principal
+    for (int dif_end = 0; dif_end < TAM_PAGINA; dif_end++) {
         int dado;
         // Leio da memória secundária o valor destino
-        if (mem_le(self->memoria_secundaria, end_mem_sec, &dado) != ERR_OK) {
+        if (mem_le(self->memoria_secundaria, end_mem_sec + dif_end, &dado) != ERR_OK) {
             console_printf("SO: problema ao ler da memória secundária");
             return false;
         }
         // Calculo o endereço físico da página
-        int end_fisico_pag = quadro_livre * TAM_PAGINA + end_virt - end_virt_ini;
+        int end_fisico_pag = quadro_livre * TAM_PAGINA + dif_end;
+
+        // Escrevo o valor na memória principal
         if (mem_escreve(self->mem, end_fisico_pag, dado) != ERR_OK) {
             // Escrevo na memória principal o valor lido da memória secundaria
             console_printf("SO: problema ao escrever na memória principal");
             return false;
         }
-        end_mem_sec++;
     }
     return true;
 }
 
+/* static bool transf_mem_princ_para_mem_sec(so_t *self, int quadro, int end_mem_sec) */
+/* { */
+/*     // Percorro o tamanho da pagina movendo cada posição para mememoria secundaria */
+/*     for (int dif_end = 0; dif_end < TAM_PAGINA; dif_end++) { */
+/*         int dado; */
+/*         int end_fisico_pag = quadro * TAM_PAGINA + dif_end; */
+/*         int end_mem_sec_pagina = end_mem_sec + dif_end; */
+/**/
+/*         // Leio da memória principal o valor destino */
+/*         if (mem_le(self->mem, end_fisico_pag, &dado) != ERR_OK) { */
+/*             console_printf("SO: problema ao ler da memória principal"); */
+/*             return false; */
+/*         } */
+/**/
+/*         // Escrevo o valor na memória secundária */
+/*         if (mem_escreve(self->memoria_secundaria, end_mem_sec_pagina, dado) != ERR_OK) { */
+/*             console_printf("SO: problema ao escrever na memória secundária"); */
+/*             return false; */
+/*         } */
+/*     } */
+/*     return true; */
+/* } */
+
 static void so_trata_page_fault_bloco_livre(so_t *self, int end_causador)
 {
-    int free_page = gere_blocos_buscar_proximo(self->gere_blocos);
+    processo_t *processo = self->processo_corrente;
+    int quadro_livre = gere_blocos_buscar_proximo(self->gere_blocos);
+    if (quadro_livre == ERR_PAGINA_INVALIDA) {
+        self->erro_interno = true;
+        console_printf("SO: problema ao buscar página livre na memória principal");
+        return;
+    }
 
-    int end_disk_ini = processo_get_end_mem_sec(self->processo_corrente) + end_causador - end_causador % TAM_PAGINA;
+    int end_disk_ini = processo_get_end_mem_sec(processo) + end_causador - (end_causador % TAM_PAGINA);
     int end_disk = end_disk_ini;
 
-    int end_virt_ini = end_causador;
-    int end_virt_fim = end_virt_ini + TAM_PAGINA - 1;
+    // Transfere a página da memória secundária para a memória principal
+    int pagina = end_causador / TAM_PAGINA;
+    if (transf_pag_mem_sec_para_mem_princ(self, end_disk, quadro_livre)) {
+        // Atualiza a tabela de páginas e o gerenciador de blocos
+        tabpag_t *tabela = processo_get_tabpag(processo);
+        tabpag_define_quadro(tabela, pagina, quadro_livre);
 
-    if (transf_pag_mem_sec_para_mem_princ(self, end_disk, free_page, end_virt_ini, end_virt_fim)) {
-        gere_blocos_atualiza_bloco(self->gere_blocos, free_page, processo_get_pid(self->processo_corrente),
-                                   end_causador / TAM_PAGINA);
-
-        tabpag_t *tabela = processo_get_tabpag(self->processo_corrente);
-        tabpag_define_quadro(tabela, end_causador / TAM_PAGINA, free_page);
+        gere_blocos_atualiza_bloco(self->gere_blocos, quadro_livre, processo_get_pid(processo), pagina);
+        console_printf("SO: página %d transferida para o quadro %d", pagina, quadro_livre);
         return;
     }
 
@@ -944,8 +973,9 @@ static void so_trata_irq_reset(so_t *self)
 
     // altera o PC para o endereço de carga (deve ter sido o endereço virtual 0)
     mem_escreve(self->mem, IRQ_END_PC, processo_get_pc(self->processo_corrente));
+
     // passa o processador para modo usuário
-    mem_escreve(self->mem, IRQ_END_modo, usuario);
+    /* mem_escreve(self->mem, IRQ_END_modo, usuario); */
 }
 
 // interrupção gerada quando a CPU identifica um erro
@@ -1082,6 +1112,7 @@ static void so_chamada_escr(so_t *self)
     int terminal_tela_ok = processo_calcula_terminal(D_TERM_A_TELA_OK, terminal);
     if (es_le(self->es, terminal_tela_ok, &estado) != ERR_OK) {
         console_printf("SO: problema no acesso ao estado da tela");
+        processo_set_reg_A(processo, -1);
         self->erro_interno = true;
         return;
     }
@@ -1090,14 +1121,15 @@ static void so_chamada_escr(so_t *self)
     if (estado == 0) {
         console_printf("SO: dispositivo de saída ocupado");
         so_processa_bloqueio_proc(self, processo, ESPERANDO_ESCRITA);
+        processo_set_reg_A(processo, -1);
         return;
     }
 
-    int dado;
+    int dado = processo_get_reg_X(processo);
     int terminal_tela = processo_calcula_terminal(D_TERM_A_TELA, terminal);
-    mem_le(self->mem, IRQ_END_X, &dado);
     if (es_escreve(self->es, terminal_tela, dado) != ERR_OK) {
         console_printf("SO: problema no acesso à tela");
+        processo_set_reg_A(processo, -1);
         self->erro_interno = true;
         return;
     }
@@ -1215,8 +1247,10 @@ static int so_carrega_programa(so_t *self, processo_t *processo, char *nome_do_e
 
     int end_carga;
     if (processo == NENHUM_PROCESSO) {
+        console_printf("\nSO: carregando programa na memória física");
         end_carga = so_carrega_programa_na_memoria_fisica(self, programa);
     } else {
+        console_printf("\nSO: carregando programa na memória virtual");
         end_carga = so_carrega_programa_na_memoria_virtual(self, programa, processo);
         processo_set_end_mem_sec(processo, end_carga);
         end_carga = 0;
@@ -1291,19 +1325,19 @@ static int so_carrega_programa_na_memoria_virtual(so_t *self, programa_t *progra
 //   pode estar em memória principal ou secundária (e tem que achar onde)
 static bool so_copia_str_do_processo(so_t *self, int tam, char str[tam], int end_virt, processo_t *processo)
 {
-    if (processo == NENHUM_PROCESSO)
+    if (processo == NULL)
         return false;
+
     for (int indice_str = 0; indice_str < tam; indice_str++) {
         int caractere;
-        // não tem memória virtual implementada, posso usar a mmu para traduzir
-        //   os endereços e acessar a memória
         if (mmu_le(self->mmu, end_virt + indice_str, &caractere, usuario) != ERR_OK) {
-            return false;
-            // se não está na memória principal, busca na memória secundária (disco)
+            console_printf("Erro ao ler o endereço virtual %d do processo %d\n", end_virt + indice_str,
+                           processo_get_pid(processo));
             mem_le(self->memoria_secundaria, processo_get_end_mem_sec(self->processo_corrente) + end_virt + indice_str,
                    &caractere);
         }
         if (caractere < 0 || caractere > 255) {
+            return false;
         }
         str[indice_str] = caractere;
         if (caractere == 0) {
@@ -1315,4 +1349,3 @@ static bool so_copia_str_do_processo(so_t *self, int tam, char str[tam], int end
 }
 
 // vim: foldmethod=marker
-
