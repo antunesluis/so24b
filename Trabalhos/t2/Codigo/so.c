@@ -1,3 +1,4 @@
+
 // so.c
 // sistema operacional
 // simulador de computador
@@ -27,11 +28,11 @@
 
 #define INTERVALO_INTERRUPCAO 50
 #define QUANTUM_INICIAL 10
-#define ESCALONADOR_ATUAL PRIORIDADE
-#define ALGORITMO_SUBSTITUICAO_ATUAL FIFO
+#define ESCALONADOR_ATUAL SIMPLES
+#define ALGORITMO_SUBSTITUICAO_ATUAL SIMPLES
 
 #define FILA_PROCESSOS_INICIAL 5
-#define MAX_PROCESSOS 5
+#define MAX_PROCESSOS 4
 #define NUM_TERMINAIS 4
 #define FATOR_MULTIPLICADOR_LIMITE_PROCESSOS 2
 #define FATOR_CRESCIMENTO_FILA 2
@@ -39,7 +40,7 @@
 #define TAMANHO_MEMORIA_SECUNDARIA = 10000
 #define TOTAL_QUADROS_MEMORIA = 100
 
-#define TEMPO_MUDANCA_PAGINA_CPU 5
+#define TEMPO_MUDANCA_PAGINA_CPU 2
 
 // Não tem processos nem memória virtual, mas é preciso usar a paginação,
 //   pelo menos para implementar relocação, já que os programas estão sendo
@@ -190,7 +191,7 @@ so_t *so_cria(cpu_t *cpu, mem_t *mem, mmu_t *mmu, es_t *es, console_t *console)
     self->tabela_processos = tabela_cria(self);
     self->fila_prontos = fila_processos_cria();
     self->metricas = cria_metricas_so();
-    self->gere_blocos = gere_blocos_cria(20);
+    self->gere_blocos = gere_blocos_cria(self->n_paginas_fisica);
     configura_cpu(self);
 
     return self;
@@ -341,7 +342,10 @@ static void gera_relatorio_final(so_t *self)
 
 static void so_processa_desbloqueio_proc(so_t *self, processo_t *processo, bool insere_fim_fila)
 {
+    console_printf("SO: processo %d desbloqueado\n", processo_get_pid(processo));
     processo_desbloqueia(processo);
+    debug_tabela_processos(self->tabela_processos, self->limite_processos);
+
     if (insere_fim_fila) {
         fila_processos_insere(self->fila_prontos, processo);
     }
@@ -352,11 +356,11 @@ static void so_processa_bloqueio_proc(so_t *self, processo_t *processo, motivo_b
     if (processo == NULL)
         return;
 
-    processo_bloqueia(processo, motivo);
+    console_printf("SO: processo %d bloqueado por motivo %s\n", processo_get_pid(processo),
+                   processo_motivo_para_string(motivo));
 
-    if (motivo == ESPERANDO_PAGINA) {
-        processo_set_tempo_desbloqueio(processo, TEMPO_MUDANCA_PAGINA_CPU);
-    }
+    processo_bloqueia(processo, motivo);
+    debug_tabela_processos(self->tabela_processos, self->limite_processos);
 
     fila_processos_remove(self->fila_prontos);
     processo_atualiza_prioridade(processo, self->quantum);
@@ -398,7 +402,8 @@ static void so_adiciona_processo_tabela(so_t *self, processo_t *processo)
 {
     for (int i = 0; i < self->limite_processos; i++) {
         if (self->tabela_processos[i] == NULL) {
-            console_printf("SO: adicionando processo %d na posição %d\n", processo_get_pid(processo), i);
+            console_printf("SO: adicionando processo %d na posição %d da tabela de processos\n",
+                           processo_get_pid(processo), i);
             self->tabela_processos[i] = processo;
             return;
         }
@@ -437,8 +442,8 @@ static processo_t *so_adiciona_novo_processo(so_t *self, char *nome_do_executave
     self->processo_corrente = processo;
     self->n_processos++;
 
-    debug_tabela_processos(self->tabela_processos, self->limite_processos);
-    debug_fila_processos(self->fila_prontos);
+    /* debug_tabela_processos(self->tabela_processos, self->limite_processos); */
+    /* debug_fila_processos(self->fila_prontos); */
     return processo;
 }
 
@@ -548,7 +553,8 @@ static int escolhe_pagina_substituir(so_t *self)
     return -1;
 }
 
-static bool transfere_pag_para_quadro(so_t *self, int end_mem_sec, int quadro_livre, int end_virt_ini, int end_virt_fim)
+static bool transf_pag_mem_sec_para_mem_princ(so_t *self, int end_mem_sec, int quadro_livre, int end_virt_ini,
+                                              int end_virt_fim)
 {
     for (int end_virt = end_virt_ini; end_virt <= end_virt_fim; end_virt++) {
         int dado;
@@ -564,46 +570,42 @@ static bool transfere_pag_para_quadro(so_t *self, int end_mem_sec, int quadro_li
             console_printf("SO: problema ao escrever na memória principal");
             return false;
         }
+        end_mem_sec++;
     }
     return true;
 }
 
-static bool trata_falha_pagina_bloco_livre(so_t *self, int end_ausente)
+static void so_trata_page_fault_bloco_livre(so_t *self, int end_causador)
 {
-    // Procuro o bloco de destino da pagina
-    int bloco_disponivel = gere_blocos_buscar_proximo(self->gere_blocos);
+    int free_page = gere_blocos_buscar_proximo(self->gere_blocos);
 
-    // Obtenho os dados de memoria do processo corrente e calculo o endereco de memoria secundaria
-    int end_mem_sec_ini = processo_get_end_mem_sec(self->processo_corrente) + end_ausente - end_ausente % TAM_PAGINA;
-    int end_mem_sec = end_mem_sec_ini;
+    int end_disk_ini = processo_get_end_mem_sec(self->processo_corrente) + end_causador - end_causador % TAM_PAGINA;
+    int end_disk = end_disk_ini;
 
-    // Obtenho os enderecos virtuais inicial e final da pagina
-    int end_virt_ini = end_ausente;
-    int end_virt_fim = end_virt_ini + TAM_PAGINA + 1;
+    int end_virt_ini = end_causador;
+    int end_virt_fim = end_virt_ini + TAM_PAGINA - 1;
 
-    // Transfere a página da memória secundária para o bloco disponivel na memória principal
-    if (!transfere_pag_para_quadro(self, end_mem_sec, bloco_disponivel, end_virt_ini, end_virt_fim)) {
-        console_printf("SO: problema ao transferir página da memória secundária para a memória principal");
-        return false;
+    if (transf_pag_mem_sec_para_mem_princ(self, end_disk, free_page, end_virt_ini, end_virt_fim)) {
+        gere_blocos_atualiza_bloco(self->gere_blocos, free_page, processo_get_pid(self->processo_corrente),
+                                   end_causador / TAM_PAGINA);
+
+        tabpag_t *tabela = processo_get_tabpag(self->processo_corrente);
+        tabpag_define_quadro(tabela, end_causador / TAM_PAGINA, free_page);
+        return;
     }
 
-    // Atualizo os dados do bloco de memoria usado
-    int pid_corrente = processo_get_pid(self->processo_corrente);
-    gere_blocos_atualiza_bloco(self->gere_blocos, bloco_disponivel, pid_corrente, end_ausente);
-
-    tabpag_t *tabela = processo_get_tabpag(self->processo_corrente);
-    tabpag_define_quadro(tabela, end_ausente / TAM_PAGINA, bloco_disponivel);
-
-    console_printf("SO: página %d transferida para o bloco %d", end_ausente, bloco_disponivel);
-    return true;
+    console_printf("SO: problema ao transferir página da memória secundária para a memória principal");
+    self->erro_interno = true;
 }
 
 static void trata_falha_pagina_substituicao(so_t *self, int end_ausente)
 {
-    console_printf("SO: tratando página ausente");
+    console_printf("SO: SUBSTUTUICAO de pagina necessaria");
+
     int pagina_removida = escolhe_pagina_substituir(self);
+
     if (pagina_removida == -1) {
-        console_printf("SO: problema ao escolher página para substituir");
+        console_printf("SO: PROBLEMA AO ESCOLHER PAGINA");
         return;
     }
 }
@@ -615,22 +617,18 @@ static void so_trata_falha_pagina(so_t *self)
 
     // Verifica se existe bloco disponivel na memoria principal para importar da memoria secundária
     if (gere_blocos_tem_disponivel(self->gere_blocos)) {
-        console_printf("SO: bloco disponível na memória principal");
+        console_printf("SO: BLOCO DISPONIVEL na memória principal");
         // Transfere a página da memória secundária para o bloco disponivel na memória principal
-        trata_falha_pagina_bloco_livre(self, end_ausente);
+        so_trata_page_fault_bloco_livre(self, end_ausente);
     } else {
-        console_printf("SO: substituindo página na memória principal");
+        console_printf("SO: SUBSTITUINDO página na memória principal");
         // Substitui uma página da memória principal por uma da memória sec
         trata_falha_pagina_substituicao(self, end_ausente);
     }
 
-    int tempo_atual = tempo_atual_sistema(self);
-    if (tempo_atual > -1 && tempo_atual > self->t_relogio_atual) {
-        console_printf("SO: bloqueio para espera de pagina no processo");
-        so_processa_bloqueio_proc(self, self->processo_corrente, ESPERANDO_PAGINA);
-    }
-
-    debug_tabela_processos(self->tabela_processos, self->n_processos);
+    int tempo_sistema = tempo_atual_sistema(self);
+    so_processa_bloqueio_proc(self, self->processo_corrente, ESPERANDO_PAGINA);
+    processo_set_tempo_desbloqueio(self->processo_corrente, tempo_sistema + TEMPO_MUDANCA_PAGINA_CPU);
 }
 
 static void trata_pendencia_leitura(so_t *self, processo_t *processo)
@@ -666,7 +664,6 @@ static void trata_pendencia_escrita(so_t *self, processo_t *processo)
 {
     int estado;
     int terminal_proc = processo_get_terminal(processo);
-
     int terminal_tela_ok = processo_calcula_terminal(D_TERM_A_TELA_OK, terminal_proc);
     if (es_le(self->es, terminal_tela_ok, &estado) != ERR_OK) {
         console_printf("SO: problema no acesso ao estado da tela");
@@ -688,7 +685,7 @@ static void trata_pendencia_escrita(so_t *self, processo_t *processo)
         return;
     }
 
-    processo_set_reg_X(processo, 0);
+    processo_set_reg_A(processo, 0);
     so_processa_desbloqueio_proc(self, processo, true);
 }
 
@@ -703,10 +700,16 @@ static void trata_pendencia_espera_morte(so_t *self, processo_t *processo)
     }
 }
 
-static void so_trata_pendencia_pagina(so_t *self, processo_t *processo)
+static void trata_pendencia_pagina(so_t *self, processo_t *processo)
 {
-    if (processo_get_tempo_desbloqueio(processo) < tempo_atual_sistema(self)) {
+    int tempo_desbloqueio = processo_get_tempo_desbloqueio(processo);
+    int tempo_sistema = tempo_atual_sistema(self);
+
+    console_printf("SO: tempo proc: %d, tempo sistema: %d", tempo_desbloqueio, tempo_sistema);
+
+    if (tempo_sistema >= tempo_desbloqueio) {
         so_processa_desbloqueio_proc(self, processo, true);
+        processo_set_reg_A(processo, 0);
     }
 }
 
@@ -733,13 +736,13 @@ static void so_trata_pendencias(so_t *self)
                 break;
             case ESPERANDO_PAGINA:
                 // Verifica se a memória secundária está disponível
-                so_trata_pendencia_pagina(self, processo);
+                trata_pendencia_pagina(self, processo);
                 break;
+            case SEM_BLOQUEIO:
                 break;
             default:
                 console_printf("SO: motivo de bloqueio desconhecido");
                 self->erro_interno = true;
-            case SEM_BLOQUEIO:
             }
         }
     }
@@ -775,14 +778,14 @@ static void so_escalona_simples(so_t *self)
     processo_t *proximo = processo_busca_primeiro_em_estado(self->tabela_processos, self->n_processos, PRONTO);
     if (proximo != NULL) {
         self->processo_corrente = proximo;
-        debug_tabela_processos(self->tabela_processos, self->limite_processos);
+        /* debug_tabela_processos(self->tabela_processos, self->limite_processos); */
         return;
     }
 
     // Se não houver processos prontos, verifica se há processos bloqueados
     if (processo_busca_primeiro_em_estado(self->tabela_processos, self->n_processos, BLOQUEADO) != NULL) {
         self->processo_corrente = NULL;
-        debug_tabela_processos(self->tabela_processos, self->limite_processos);
+        /* debug_tabela_processos(self->tabela_processos, self->limite_processos); */
         return;
     }
 
@@ -807,7 +810,7 @@ static void so_escalona_round_robin(so_t *self)
 
         // Buscas na fila resultam em preempcoes
         incrementa_preempcoes_processo(processo_corrente);
-        debug_fila_processos(self->fila_prontos);
+        /* debug_fila_processos(self->fila_prontos); */
     }
 
     // Busca o proximo processo pronto e define como processo corrente
@@ -815,7 +818,7 @@ static void so_escalona_round_robin(so_t *self)
         // Obtem o primeiro processo pronto da fila de prontos e define como processo corrente
         self->processo_corrente = fila_processos_primeiro(self->fila_prontos);
         self->quantum = QUANTUM_INICIAL;
-        debug_fila_processos(self->fila_prontos);
+        /* debug_fila_processos(self->fila_prontos); */
         return;
     }
 
@@ -829,6 +832,7 @@ static void so_escalona_prioridade(so_t *self)
     // Verifica se o processo corrente pode continuar executando e se ainda possui quantum
     if (processo_corrente != NULL && processo_get_estado(processo_corrente) == PRONTO && self->quantum > 0) {
         // Continua com o processo corrente;
+        console_printf("SO: processo %d continua executando", processo_get_pid(processo_corrente));
         return;
     }
 
@@ -843,13 +847,18 @@ static void so_escalona_prioridade(so_t *self)
 
         // Buscas na fila resultam em preempcoes
         incrementa_preempcoes_processo(processo_corrente);
-        debug_fila_processos(self->fila_prontos);
+
+        console_printf("SO: preempção no processo %d", processo_get_pid(processo_corrente));
+        /* debug_fila_processos(self->fila_prontos); */
     }
 
     // Busca o proximo processo pronto e define como processo corrente
     if (!fila_processos_vazia(self->fila_prontos)) {
         fila_processos_ordena_prioridade(self->fila_prontos);
-        debug_fila_processos(self->fila_prontos);
+
+        console_printf("SO: escalonando por prioridade");
+        /* debug_fila_processos(self->fila_prontos); */
+
         //  Obtem o primeiro processo pronto da fila de prontos e define como processo corrente
         self->processo_corrente = fila_processos_primeiro(self->fila_prontos);
         self->quantum = QUANTUM_INICIAL;
@@ -862,20 +871,29 @@ static void so_escalona_prioridade(so_t *self)
 
 static int so_despacha(so_t *self)
 {
-    if (self->erro_interno)
-        return 1;
-
+    // t1: se houver processo corrente, coloca o estado desse processo onde ele
+    //   será recuperado pela CPU (em IRQ_END_*) e retorna 0, senão retorna 1
+    // o valor retornado será o valor de retorno de CHAMAC
     processo_t *processo_corrente = self->processo_corrente;
-    if (processo_corrente == NULL)
+    if (self->erro_interno || processo_corrente == NULL)
         return 1;
 
-    mem_escreve(self->mem, IRQ_END_PC, processo_get_pc(processo_corrente));
-    mem_escreve(self->mem, IRQ_END_A, processo_get_reg_A(processo_corrente));
-    mem_escreve(self->mem, IRQ_END_X, processo_get_reg_X(processo_corrente));
-    mem_escreve(self->mem, IRQ_END_complemento, processo_get_complemento(processo_corrente));
-    mem_escreve(self->mem, IRQ_END_X, ERR_OK);
-
+    // Obtem o estado do processo corrente
+    int a, x, pc, complemento;
+    a = processo_get_reg_A(processo_corrente);
+    x = processo_get_reg_X(processo_corrente);
+    pc = processo_get_pc(processo_corrente);
+    complemento = processo_get_complemento(processo_corrente);
     tabpag_t *tabpag = processo_get_tabpag(processo_corrente);
+
+    // Atualiza os registradores do processador
+    mem_escreve(self->mem, IRQ_END_A, a);
+    mem_escreve(self->mem, IRQ_END_X, x);
+    mem_escreve(self->mem, IRQ_END_PC, pc);
+    mem_escreve(self->mem, IRQ_END_complemento, complemento);
+    mem_escreve(self->mem, IRQ_END_erro, ERR_OK);
+
+    // Atualiza a tabela de páginas do processo corrente
     mmu_define_tabpag(self->mmu, tabpag);
 
     return 0;
@@ -936,7 +954,7 @@ static void so_trata_irq_err_cpu(so_t *self)
 
     int err_int = processo_get_erro(self->processo_corrente);
     if (err_int == ERR_PAG_AUSENTE) {
-        console_printf("SO: página ausente");
+        console_printf("SO: PÁGINA AUSENTE");
         so_trata_falha_pagina(self);
         return;
     }
@@ -1076,13 +1094,8 @@ static void so_chamada_escr(so_t *self)
     }
 
     int dado;
-    if (mem_le(self->mem, IRQ_END_X, &dado) != ERR_OK) {
-        console_printf("SO: problema no acesso ao registrador X");
-        self->erro_interno = true;
-        return;
-    }
-
     int terminal_tela = processo_calcula_terminal(D_TERM_A_TELA, terminal);
+    mem_le(self->mem, IRQ_END_X, &dado);
     if (es_escreve(self->es, terminal_tela, dado) != ERR_OK) {
         console_printf("SO: problema no acesso à tela");
         self->erro_interno = true;
@@ -1205,10 +1218,12 @@ static int so_carrega_programa(so_t *self, processo_t *processo, char *nome_do_e
         end_carga = so_carrega_programa_na_memoria_fisica(self, programa);
     } else {
         end_carga = so_carrega_programa_na_memoria_virtual(self, programa, processo);
+        processo_set_end_mem_sec(processo, end_carga);
+        end_carga = 0;
     }
 
+    console_printf("SO: programa '%s' carregado em %d", nome_do_executavel, end_carga);
     prog_destroi(programa);
-    console_printf("SO: programa carregado em %d", end_carga);
     return end_carga;
 }
 
@@ -1223,12 +1238,17 @@ static int so_carrega_programa_na_memoria_fisica(so_t *self, programa_t *program
             return -1;
         }
     }
+
+    gere_blocos_cadastra_bloco(self->gere_blocos, end_ini, end_fim, 0);
+
     console_printf("carregado na memória física, %d-%d", end_ini, end_fim);
     return end_ini;
 }
 
 static int so_carrega_programa_na_memoria_virtual(so_t *self, programa_t *programa, processo_t *processo)
 {
+    // meu: carregará programa na memória secundária
+
     // t2: isto tá furado...
     // está simplesmente lendo para o próximo quadro que nunca foi ocupado,
     //   nem testa se tem memória disponível
@@ -1239,28 +1259,26 @@ static int so_carrega_programa_na_memoria_virtual(so_t *self, programa_t *progra
     //   memória secundária pode ser alocada da forma como a principal está sendo
     //   alocada aqui (sem reuso)
 
-    // Atualizo os endereços de memória fisica
-    int end_mem_sec_inicio = self->prox_endereco_mem_sec;
-    int end_mem_sec = end_mem_sec_inicio;
+    // carrega o programa na memória secundária
+    int end_disk_ini = self->prox_endereco_mem_sec;
+    int end_disk = end_disk_ini;
 
-    // Inicializo os valores da memoria virtual
-    int end_virt_inicio = 0;
-    int end_virt_fim = end_virt_inicio + prog_tamanho(programa) - 1;
+    int end_virt_ini = 0;
+    int end_virt_fim = end_virt_ini + prog_tamanho(programa) - 1;
 
-    // Atualizo o proximo endereço da memória secundária somando o tamanho do programa atual
-    self->prox_endereco_mem_sec = end_mem_sec_inicio + end_virt_fim + 1;
+    self->prox_endereco_mem_sec = end_disk_ini + end_virt_fim + 1;
 
-    // Carrega o programa na memoria secundária
-    for (int end_virt = end_virt_inicio; end_virt <= end_virt_fim; end_virt++) {
-        if (mem_escreve(self->memoria_secundaria, end_mem_sec, prog_dado(programa, end_virt)) != ERR_OK) {
-            console_printf("Erro na carga da memória, endereco %d\n", end_virt);
+    for (int end_virt = end_virt_ini; end_virt <= end_virt_fim; end_virt++) {
+        if (mem_escreve(self->memoria_secundaria, end_disk, prog_dado(programa, end_virt)) != ERR_OK) {
+            console_printf("Erro na carga da memória, end virt %d fís %d\n", end_virt, end_disk);
             return -1;
         }
-        end_mem_sec++;
+        end_disk++;
     }
-    console_printf("carregado na memória virtual, %d-%d", end_virt_inicio, end_virt_fim);
+    console_printf("SO: carregado na memória secundária virt:%d a %d, sec: %d a %d", end_virt_ini, end_virt_fim,
+                   end_disk_ini, end_disk - 1);
 
-    return end_mem_sec_inicio;
+    return end_disk_ini;
 }
 
 // ACESSO À MEMÓRIA DOS PROCESSOS {{{1
@@ -1275,18 +1293,17 @@ static bool so_copia_str_do_processo(so_t *self, int tam, char str[tam], int end
 {
     if (processo == NENHUM_PROCESSO)
         return false;
-
     for (int indice_str = 0; indice_str < tam; indice_str++) {
         int caractere;
-
-        err_t err = mmu_le(self->mmu, end_virt + indice_str, &caractere, usuario);
-        if (err != ERR_OK) {
-            console_printf("SO: Problema ao ler o endereco virtual %d do processo\n", end_virt + indice_str);
-            mem_le(self->memoria_secundaria, processo_get_end_mem_sec(processo) + end_virt + indice_str, &caractere);
-        }
-
-        if (caractere < 0 || caractere > 255) {
+        // não tem memória virtual implementada, posso usar a mmu para traduzir
+        //   os endereços e acessar a memória
+        if (mmu_le(self->mmu, end_virt + indice_str, &caractere, usuario) != ERR_OK) {
             return false;
+            // se não está na memória principal, busca na memória secundária (disco)
+            mem_le(self->memoria_secundaria, processo_get_end_mem_sec(self->processo_corrente) + end_virt + indice_str,
+                   &caractere);
+        }
+        if (caractere < 0 || caractere > 255) {
         }
         str[indice_str] = caractere;
         if (caractere == 0) {
@@ -1298,3 +1315,4 @@ static bool so_copia_str_do_processo(so_t *self, int tam, char str[tam], int end
 }
 
 // vim: foldmethod=marker
+

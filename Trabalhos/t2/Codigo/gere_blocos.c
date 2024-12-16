@@ -1,5 +1,6 @@
 #include "gere_blocos.h"
 #include "console.h"
+#include "mmu.h"
 #include <stdlib.h>
 
 gere_blocos_t *gere_blocos_cria(int tam)
@@ -48,6 +49,14 @@ int gere_blocos_buscar_proximo(gere_blocos_t *gerenciador)
         }
     }
     return -1;
+}
+
+void gere_blocos_cadastra_bloco(gere_blocos_t *gerenciador, int end_ini, int end_fim, int pid)
+{
+    for (int address = 0; address < end_fim; address += TAM_PAGINA) {
+        gerenciador->blocos[address / TAM_PAGINA].em_uso = true;
+        gerenciador->blocos[address / TAM_PAGINA].processo_pid = pid;
+    }
 }
 
 void gere_blocos_atualiza_bloco(gere_blocos_t *gerenciador, int indice, int pid, int pagina)

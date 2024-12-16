@@ -26,4 +26,6 @@ int gere_blocos_buscar_proximo(gere_blocos_t *self);
 
 void gere_blocos_atualiza_bloco(gere_blocos_t *gerenciador, int indice, int pid, int pagina);
 
+void gere_blocos_cadastra_bloco(gere_blocos_t *gerenciador, int end_ini, int end_fim, int pid);
+
 #endif // GERE_BLOCOS_H
