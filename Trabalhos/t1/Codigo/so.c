@@ -482,7 +482,7 @@ static void trata_pendencia_escrita(so_t *self, processo_t *processo)
         return;
     }
 
-    processo_set_reg_X(processo, 0);
+    processo_set_reg_A(processo, 0);
     so_processa_desbloqueio_proc(self, processo, true);
 }
 

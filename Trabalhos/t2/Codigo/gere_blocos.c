@@ -39,6 +39,7 @@ bool gere_blocos_tem_disponivel(gere_blocos_t *gerenciador)
             return true;
         }
     }
+
     return false;
 }
 
@@ -50,6 +51,7 @@ int gere_blocos_buscar_proximo(gere_blocos_t *gerenciador)
             return i;
         }
     }
+
     return -1;
 }
 

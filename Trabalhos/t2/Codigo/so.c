@@ -563,7 +563,7 @@ static bool transf_pag_mem_sec_para_mem_princ(so_t *self, int end_mem_sec, int q
             return false;
         }
         // Calculo o endereço físico da página
-        int end_fisico_pag = quadro_livre * TAM_PAGINA + dif_end;
+        int end_fisico_pag = (quadro_livre * TAM_PAGINA) + dif_end;
 
         // Escrevo o valor na memória principal
         if (mem_escreve(self->mem, end_fisico_pag, dado) != ERR_OK) {
@@ -580,7 +580,7 @@ static bool transf_pag_mem_sec_para_mem_princ(so_t *self, int end_mem_sec, int q
 /*     // Percorro o tamanho da pagina movendo cada posição para mememoria secundaria */
 /*     for (int dif_end = 0; dif_end < TAM_PAGINA; dif_end++) { */
 /*         int dado; */
-/*         int end_fisico_pag = quadro * TAM_PAGINA + dif_end; */
+/*         int end_fisico_pag = (quadro * TAM_PAGINA + dif_end; */
 /*         int end_mem_sec_pagina = end_mem_sec + dif_end; */
 /**/
 /*         // Leio da memória principal o valor destino */
@@ -692,8 +692,9 @@ static void trata_pendencia_leitura(so_t *self, processo_t *processo)
 static void trata_pendencia_escrita(so_t *self, processo_t *processo)
 {
     int estado;
-    int terminal_proc = processo_get_terminal(processo);
-    int terminal_tela_ok = processo_calcula_terminal(D_TERM_A_TELA_OK, terminal_proc);
+    int terminal = processo_get_terminal(processo);
+
+    int terminal_tela_ok = processo_calcula_terminal(D_TERM_A_TELA_OK, terminal);
     if (es_le(self->es, terminal_tela_ok, &estado) != ERR_OK) {
         console_printf("SO: problema no acesso ao estado da tela");
         self->erro_interno = true;
@@ -704,10 +705,10 @@ static void trata_pendencia_escrita(so_t *self, processo_t *processo)
     if (estado == 0) {
         return;
     }
-    console_printf("SO: terminal %d desbloqueado para escrita", terminal_proc);
+    console_printf("SO: terminal %d desbloqueado para escrita", terminal);
 
     int dado = processo_get_reg_X(processo);
-    int terminal_tela = processo_calcula_terminal(D_TERM_A_TELA, terminal_proc);
+    int terminal_tela = processo_calcula_terminal(D_TERM_A_TELA, terminal);
     if (es_escreve(self->es, terminal_tela, dado) != ERR_OK) {
         console_printf("SO: problema no acesso à tela");
         self->erro_interno = true;
@@ -1112,7 +1113,6 @@ static void so_chamada_escr(so_t *self)
     int terminal_tela_ok = processo_calcula_terminal(D_TERM_A_TELA_OK, terminal);
     if (es_le(self->es, terminal_tela_ok, &estado) != ERR_OK) {
         console_printf("SO: problema no acesso ao estado da tela");
-        processo_set_reg_A(processo, -1);
         self->erro_interno = true;
         return;
     }
@@ -1121,7 +1121,6 @@ static void so_chamada_escr(so_t *self)
     if (estado == 0) {
         console_printf("SO: dispositivo de saída ocupado");
         so_processa_bloqueio_proc(self, processo, ESPERANDO_ESCRITA);
-        processo_set_reg_A(processo, -1);
         return;
     }
 
@@ -1129,7 +1128,6 @@ static void so_chamada_escr(so_t *self)
     int terminal_tela = processo_calcula_terminal(D_TERM_A_TELA, terminal);
     if (es_escreve(self->es, terminal_tela, dado) != ERR_OK) {
         console_printf("SO: problema no acesso à tela");
-        processo_set_reg_A(processo, -1);
         self->erro_interno = true;
         return;
     }
@@ -1144,15 +1142,9 @@ static void so_chamada_cria_proc(so_t *self)
         return;
 
     // Le o X do descritor do processo criador para obter o nome do arquivo do processo
-    int ender_nome_arq;
-    if (mem_le(self->mem, IRQ_END_X, &ender_nome_arq) != ERR_OK) {
-        console_printf("SO: Erro ao obter o endereço do nome do programa\n");
-        processo_set_reg_A(processo_corrente, -1);
-        return;
-    }
-
     char nome[100];
     // Copia o valor do registrador X do processo para a memória
+    int ender_nome_arq = processo_get_reg_X(processo_corrente);
     if (!so_copia_str_do_processo(self, 100, nome, ender_nome_arq, processo_corrente)) {
         console_printf("SO: Erro ao copiar o nome do arquivo do processo\n");
         processo_set_reg_A(processo_corrente, -1);
